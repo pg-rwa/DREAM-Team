@@ -93,9 +93,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/cto/talk")
     async def talk_to_cto(req: CTOMessage, _: str = Depends(require_auth)):
-        await broadcast({"type": "cto_thinking", "message": req.message})
         response = await team.delegate_to_cto(req.message)
-        await broadcast({"type": "cto_response", "response": response})
         return {"response": response}
 
     # --- Project routes ---
