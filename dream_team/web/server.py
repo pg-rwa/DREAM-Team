@@ -97,9 +97,11 @@ def create_app() -> FastAPI:
     @app.post("/api/cto/talk")
     async def talk_to_cto(req: CTOMessage, _: str = Depends(require_auth)):
         async def stream_response():
-            async for chunk in team.delegate_to_cto_stream(req.message):
-                # Send as Server-Sent Events format
-                yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+            try:
+                async for chunk in team.delegate_to_cto_stream(req.message):
+                    yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+            except Exception as e:
+                yield f"data: {json.dumps({'chunk': f'[Error: {e}]'})}\n\n"
             yield "data: {\"done\": true}\n\n"
 
         return StreamingResponse(
@@ -171,8 +173,11 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail=f"No agent for '{name}'")
 
         async def stream_response():
-            async for chunk in agent.chat_stream(req.message):
-                yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+            try:
+                async for chunk in agent.chat_stream(req.message):
+                    yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+            except Exception as e:
+                yield f"data: {json.dumps({'chunk': f'[Error: {e}]'})}\n\n"
             yield "data: {\"done\": true}\n\n"
 
         return StreamingResponse(
