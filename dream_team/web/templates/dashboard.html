@@ -320,23 +320,14 @@
     <div class="layout">
         <!-- Sidebar -->
         <div class="sidebar">
-            <!-- CTO -->
+            <!-- Chat Tabs -->
             <div class="sidebar-section">
-                <h3>Command</h3>
-                <div class="agent-card active" id="ctoCard">
+                <h3>Chats</h3>
+                <div class="agent-card active" data-chat="cto" onclick="switchChat('cto')">
                     <div class="name">CTO <span class="status-badge status-idle" id="ctoStatus">IDLE</span></div>
-                    <div class="meta">Oversees all projects</div>
+                    <div class="meta">Strategy & delegation</div>
                 </div>
-            </div>
-
-            <!-- Agents -->
-            <div class="sidebar-section">
-                <h3>Project Agents</h3>
-                <div id="agentsList">
-                    <div style="color: var(--text-dim); font-size: 12px; padding: 8px;">
-                        No agents yet. Add a project to get started.
-                    </div>
-                </div>
+                <div id="agentChatTabs"></div>
             </div>
 
             <!-- Tasks -->
@@ -352,18 +343,8 @@
 
         <!-- Main -->
         <div class="main">
-            <div class="chat-area" id="chatArea">
-                <div class="message system">
-                    <div class="message-header"><span class="role">System</span></div>
-                    <div class="message-body">Welcome to DREAM Team. Talk to your CTO below — give ideas, feedback, or direction. The CTO will analyze and delegate to your project agents.
-
-Type naturally, e.g.:
-  "Add dark mode to the fitness app"
-  "What's the status across all projects?"
-  "Start a new project for portfolio website"</div>
-                </div>
-            </div>
-            <div class="thinking" id="thinking">CTO is thinking</div>
+            <div class="chat-area" id="chatArea"></div>
+            <div class="thinking" id="thinking">Thinking</div>
             <div class="input-area">
                 <div class="input-row">
                     <input type="text" id="messageInput" placeholder="Talk to the CTO..."
@@ -457,6 +438,9 @@ Type naturally, e.g.:
 
     <script>
         let ws = null;
+        let activeChat = 'cto';
+        // Store chat history per tab: { 'cto': [{type, role, content, time}], 'repo-name': [...] }
+        const chatHistory = { cto: [{type:'system', role:'System', content:'Welcome to DREAM Team. Talk to your CTO — give ideas, feedback, or direction.\n\nType naturally, e.g.:\n  "Add dark mode to the fitness app"\n  "What\'s the status across all projects?"'}] };
 
         // --- WebSocket ---
         function connectWS() {
@@ -466,31 +450,16 @@ Type naturally, e.g.:
             ws.onclose = () => setTimeout(connectWS, 3000);
             ws.onmessage = (e) => {
                 const msg = JSON.parse(e.data);
-                handleWSMessage(msg);
+                if (msg.type === 'init') renderTeam(msg.team);
+                else if (msg.type === 'project_added') {
+                    refreshTeam();
+                    pushMsg('cto', 'system', 'System', `Project "${msg.project}" added with agent ${msg.agent.name}`);
+                } else if (msg.type === 'task_started') {
+                    refreshTeam();
+                    const proj = msg.task.project;
+                    pushMsg(proj in chatHistory ? proj : 'cto', 'system', 'System', `Task "${msg.task.title}" started`);
+                }
             };
-        }
-
-        function handleWSMessage(msg) {
-            switch (msg.type) {
-                case 'init':
-                    renderTeam(msg.team);
-                    break;
-                case 'cto_thinking':
-                    document.getElementById('thinking').classList.add('active');
-                    break;
-                case 'cto_response':
-                    document.getElementById('thinking').classList.remove('active');
-                    addMessage('cto', 'CTO', msg.response);
-                    break;
-                case 'project_added':
-                    refreshTeam();
-                    addMessage('system', 'System', `Project "${msg.project}" added with agent ${msg.agent.name}`);
-                    break;
-                case 'task_started':
-                    refreshTeam();
-                    addMessage('system', 'System', `Task "${msg.task.title}" started on ${msg.task.project}`);
-                    break;
-            }
         }
 
         // --- API calls ---
@@ -507,161 +476,151 @@ Type naturally, e.g.:
             if (data) renderTeam(data);
         }
 
-        // --- Render functions ---
+        // --- Render ---
         function renderTeam(data) {
-            // Agents
-            const agentsEl = document.getElementById('agentsList');
+            const tabsEl = document.getElementById('agentChatTabs');
             const agents = Object.values(data.agents || {});
-            if (agents.length === 0) {
-                agentsEl.innerHTML = '<div style="color:var(--text-dim);font-size:12px;padding:8px;">No agents yet.</div>';
-            } else {
-                agentsEl.innerHTML = agents.map(a => `
-                    <div class="agent-card" onclick="showAgent('${a.repo_name}')">
-                        <div class="name">${a.name}
-                            <span class="status-badge status-${a.status}">${a.status.toUpperCase()}</span>
-                        </div>
-                        <div class="meta">${a.repo_name} ${a.current_task ? '| ' + a.current_task : ''}</div>
-                    </div>
-                `).join('');
-            }
+            tabsEl.innerHTML = agents.map(a => {
+                const isActive = activeChat === a.repo_name ? ' active' : '';
+                // Ensure chat history exists for this agent
+                if (!chatHistory[a.repo_name]) {
+                    chatHistory[a.repo_name] = [{type:'system', role:'System', content:`Chat with ${a.name} (${a.repo_name})\nTech: ${(a.tech_stack||[]).join(', ') || 'N/A'}\n\nAsk about the project, give tasks, or discuss code.`}];
+                }
+                return `<div class="agent-card${isActive}" data-chat="${a.repo_name}" onclick="switchChat('${a.repo_name}')">
+                    <div class="name">${escapeHtml(a.name)} <span class="status-badge status-${a.status}">${a.status.toUpperCase()}</span></div>
+                    <div class="meta">${escapeHtml(a.repo_name)}</div>
+                </div>`;
+            }).join('');
 
             // Tasks
             const tasksEl = document.getElementById('tasksList');
             const summary = data.tasks || {};
             const byStatus = summary.by_status || {};
             if (summary.total > 0) {
-                tasksEl.innerHTML = `
-                    <div style="font-size:12px;padding:4px 8px;color:var(--text-dim);">
-                        Total: ${summary.total} |
-                        ${Object.entries(byStatus).map(([k,v]) => `${k}: ${v}`).join(' | ')}
-                    </div>`;
+                tasksEl.innerHTML = `<div style="font-size:12px;padding:4px 8px;color:var(--text-dim);">
+                    Total: ${summary.total} | ${Object.entries(byStatus).map(([k,v]) => `${k}: ${v}`).join(' | ')}
+                </div>`;
             }
         }
 
-        // --- Chat ---
-        function addMessage(type, role, content) {
+        // --- Chat tab switching ---
+        function switchChat(chatId) {
+            activeChat = chatId;
+            // Update sidebar active state
+            document.querySelectorAll('.agent-card').forEach(el => {
+                el.classList.toggle('active', el.dataset.chat === chatId);
+            });
+            // Update placeholder
+            const input = document.getElementById('messageInput');
+            input.placeholder = chatId === 'cto' ? 'Talk to the CTO...' : `Talk to ${chatId} agent...`;
+            // Render chat history
+            renderChatArea();
+            input.focus();
+        }
+
+        function renderChatArea() {
             const chatArea = document.getElementById('chatArea');
-            const div = document.createElement('div');
-            div.className = `message ${type}`;
-            div.innerHTML = `
-                <div class="message-header"><span class="role">${role}</span> &mdash; ${new Date().toLocaleTimeString()}</div>
-                <div class="message-body">${escapeHtml(content)}</div>
-            `;
-            chatArea.appendChild(div);
+            const messages = chatHistory[activeChat] || [];
+            chatArea.innerHTML = messages.map(m => `
+                <div class="message ${m.type}">
+                    <div class="message-header"><span class="role">${escapeHtml(m.role)}</span> &mdash; ${m.time || ''}</div>
+                    <div class="message-body">${escapeHtml(m.content)}</div>
+                </div>
+            `).join('');
             chatArea.scrollTop = chatArea.scrollHeight;
         }
 
-        function escapeHtml(s) {
-            return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        function pushMsg(chatId, type, role, content) {
+            if (!chatHistory[chatId]) chatHistory[chatId] = [];
+            chatHistory[chatId].push({type, role, content, time: new Date().toLocaleTimeString()});
+            if (chatId === activeChat) renderChatArea();
         }
 
+        function escapeHtml(s) {
+            return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        }
+
+        // --- Streaming helper ---
+        async function streamSSE(url, body, chatId, roleName) {
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(body),
+            });
+            if (res.status === 401) { window.location.href = '/login'; return; }
+
+            document.getElementById('thinking').classList.remove('active');
+
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            let fullText = '';
+            let buffer = '';
+            // Add placeholder to history
+            const msgIdx = chatHistory[chatId].length;
+            chatHistory[chatId].push({type:'cto', role:roleName, content:'', time: new Date().toLocaleTimeString()});
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop();
+                for (const line of lines) {
+                    if (!line.startsWith('data: ')) continue;
+                    try {
+                        const data = JSON.parse(line.slice(6));
+                        if (data.chunk) {
+                            fullText += data.chunk;
+                            chatHistory[chatId][msgIdx].content = fullText;
+                            if (chatId === activeChat) renderChatArea();
+                        }
+                    } catch (e) {}
+                }
+            }
+        }
+
+        // --- Send message ---
         async function sendMessage() {
             const input = document.getElementById('messageInput');
             const msg = input.value.trim();
             if (!msg) return;
 
             input.value = '';
-            addMessage('user', 'You', msg);
+            pushMsg(activeChat, 'user', 'You', msg);
             document.getElementById('thinking').classList.add('active');
             document.getElementById('sendBtn').disabled = true;
 
-            // Create a placeholder message for streaming
-            const msgEl = addStreamMessage('cto', 'CTO');
-
             try {
-                const res = await fetch('/api/cto/talk', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ message: msg }),
-                });
-                if (res.status === 401) { window.location.href = '/login'; return; }
-
-                document.getElementById('thinking').classList.remove('active');
-
-                const reader = res.body.getReader();
-                const decoder = new TextDecoder();
-                let fullText = '';
-                let buffer = '';
-
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-
-                    buffer += decoder.decode(value, { stream: true });
-                    const lines = buffer.split('\n');
-                    buffer = lines.pop(); // keep incomplete line in buffer
-
-                    for (const line of lines) {
-                        if (!line.startsWith('data: ')) continue;
-                        try {
-                            const data = JSON.parse(line.slice(6));
-                            if (data.chunk) {
-                                fullText += data.chunk;
-                                updateStreamMessage(msgEl, fullText);
-                            }
-                        } catch (e) { /* ignore parse errors */ }
-                    }
+                if (activeChat === 'cto') {
+                    await streamSSE('/api/cto/talk', { message: msg }, 'cto', 'CTO');
+                } else {
+                    await streamSSE(`/api/projects/${activeChat}/chat`, { message: msg }, activeChat, activeChat);
                 }
             } catch (e) {
                 document.getElementById('thinking').classList.remove('active');
-                updateStreamMessage(msgEl, 'Error communicating with CTO: ' + e.message);
+                pushMsg(activeChat, 'system', 'System', 'Error: ' + e.message);
             }
             document.getElementById('sendBtn').disabled = false;
-            refreshTeam();
-        }
-
-        function addStreamMessage(type, role) {
-            const chatArea = document.getElementById('chatArea');
-            const div = document.createElement('div');
-            div.className = `message ${type}`;
-            div.innerHTML = `
-                <div class="message-header"><span class="role">${role}</span> &mdash; ${new Date().toLocaleTimeString()}</div>
-                <div class="message-body"></div>
-            `;
-            chatArea.appendChild(div);
-            chatArea.scrollTop = chatArea.scrollHeight;
-            return div;
-        }
-
-        function updateStreamMessage(msgEl, text) {
-            const body = msgEl.querySelector('.message-body');
-            body.textContent = text;
-            const chatArea = document.getElementById('chatArea');
-            chatArea.scrollTop = chatArea.scrollHeight;
         }
 
         document.getElementById('messageInput').addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                sendMessage();
-            }
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
         });
 
         // --- Projects ---
         async function addProject() {
             const url = document.getElementById('projUrl').value.trim();
-            const name = document.getElementById('projName').value.trim() ||
-                         url.split('/').pop().replace('.git', '');
+            const name = document.getElementById('projName').value.trim() || url.split('/').pop().replace('.git', '');
             const desc = document.getElementById('projDesc').value.trim();
             const stack = document.getElementById('projStack').value.split(',').map(s => s.trim()).filter(Boolean);
             const branch = document.getElementById('projBranch').value.trim() || 'main';
-
             if (!url) return alert('Repository URL is required');
-
             closeModal('addProject');
-            addMessage('system', 'System', `Adding project "${name}"...`);
-
+            pushMsg('cto', 'system', 'System', `Adding project "${name}"...`);
             try {
-                const data = await api('POST', '/api/projects', {
-                    name, repo_url: url, description: desc, tech_stack: stack, branch
-                });
-                if (data) {
-                    addMessage('system', 'System', `Project "${name}" added! Agent: ${data.agent.name}`);
-                    refreshTeam();
-                }
-            } catch (e) {
-                addMessage('system', 'System', 'Error adding project: ' + e.message);
-            }
+                const data = await api('POST', '/api/projects', { name, repo_url: url, description: desc, tech_stack: stack, branch });
+                if (data) { pushMsg('cto', 'system', 'System', `Project "${name}" added! Agent: ${data.agent.name}`); refreshTeam(); }
+            } catch (e) { pushMsg('cto', 'system', 'System', 'Error adding project: ' + e.message); }
         }
 
         // --- Tasks ---
@@ -671,34 +630,14 @@ Type naturally, e.g.:
             const desc = document.getElementById('taskDesc').value.trim();
             const priority = document.getElementById('taskPriority').value.trim() || 'medium';
             const execute = document.getElementById('taskExecute').checked;
-
             if (!project || !title) return alert('Project and title are required');
-
             closeModal('addTask');
-            addMessage('system', 'System', `Creating task "${title}" for ${project}...`);
-
+            const chatId = project in chatHistory ? project : 'cto';
+            pushMsg(chatId, 'system', 'System', `Creating task "${title}" for ${project}...`);
             try {
-                const data = await api('POST', '/api/tasks', {
-                    project, title, description: desc || title, priority, execute
-                });
-                if (data) {
-                    addMessage('system', 'System', `Task created: ${data.task.task_id}`);
-                    refreshTeam();
-                }
-            } catch (e) {
-                addMessage('system', 'System', 'Error creating task: ' + e.message);
-            }
-        }
-
-        // --- Agent detail ---
-        async function showAgent(projectName) {
-            addMessage('system', 'System', `Fetching status for ${projectName}...`);
-            try {
-                const data = await api('GET', `/api/projects/${projectName}/status`);
-                if (data) addMessage('cto', projectName, data.status);
-            } catch (e) {
-                addMessage('system', 'System', 'Error: ' + e.message);
-            }
+                const data = await api('POST', '/api/tasks', { project, title, description: desc || title, priority, execute });
+                if (data) { pushMsg(chatId, 'system', 'System', `Task created: ${data.task.task_id}`); refreshTeam(); }
+            } catch (e) { pushMsg(chatId, 'system', 'System', 'Error creating task: ' + e.message); }
         }
 
         // --- GitHub ---
@@ -707,13 +646,11 @@ Type naturally, e.g.:
             const btn = document.getElementById('loadReposBtn');
             btn.disabled = true;
             el.innerHTML = '<div style="color:var(--text-dim);font-size:13px;padding:8px;">Loading repos...</div>';
-
             try {
                 const data = await api('GET', '/api/github/repos');
                 if (!data || !data.repos || data.repos.length === 0) {
-                    el.innerHTML = '<div style="color:var(--text-dim);font-size:13px;padding:8px;">No repos found. Make sure gh CLI is authenticated on the server.</div>';
-                    btn.disabled = false;
-                    return;
+                    el.innerHTML = '<div style="color:var(--text-dim);font-size:13px;padding:8px;">No repos found. Ensure gh CLI is authenticated on the server.</div>';
+                    btn.disabled = false; return;
                 }
                 el.innerHTML = data.repos.map(r => `
                     <div class="task-item">
@@ -726,36 +663,28 @@ Type naturally, e.g.:
                     </div>
                 `).join('');
             } catch (e) {
-                el.innerHTML = `<div style="color:var(--red);font-size:13px;padding:8px;">Error: ${e.message}</div>`;
+                el.innerHTML = '<div style="color:var(--red);font-size:13px;padding:8px;">Error: ' + escapeHtml(e.message) + '</div>';
             }
             btn.disabled = false;
         }
 
         async function assignAgent(repoName, btn) {
-            btn.disabled = true;
-            btn.textContent = 'Assigning...';
+            btn.disabled = true; btn.textContent = 'Assigning...';
             try {
                 const data = await api('POST', `/api/github/repos/${repoName}/assign`);
                 if (data && data.agent) {
-                    btn.textContent = 'Assigned';
-                    btn.style.borderColor = 'var(--green)';
-                    btn.style.color = 'var(--green)';
-                    addMessage('system', 'System', `Agent "${data.agent.name}" assigned to ${repoName}`);
+                    btn.textContent = 'Assigned'; btn.style.borderColor = 'var(--green)'; btn.style.color = 'var(--green)';
+                    pushMsg('cto', 'system', 'System', `Agent "${data.agent.name}" assigned to ${repoName}`);
                     refreshTeam();
                 }
-            } catch (e) {
-                btn.textContent = 'Error';
-                btn.style.color = 'var(--red)';
-            }
+            } catch (e) { btn.textContent = 'Error'; btn.style.color = 'var(--red)'; }
         }
 
         async function importAllRepos() {
             const btn = document.getElementById('importAllBtn');
-            btn.disabled = true;
-            btn.textContent = 'Importing...';
+            btn.disabled = true; btn.textContent = 'Importing...';
             closeModal('github');
-            addMessage('system', 'System', 'Importing all GitHub repos and assigning agents...');
-
+            pushMsg('cto', 'system', 'System', 'Importing all GitHub repos and assigning agents...');
             try {
                 const data = await api('POST', '/api/github/import-all?exclude=dream-team');
                 if (data && data.results) {
@@ -765,33 +694,24 @@ Type naturally, e.g.:
                     let msg = `Import complete: ${assigned.length} new agents assigned`;
                     if (existing.length) msg += `, ${existing.length} already had agents`;
                     if (errors.length) msg += `, ${errors.length} errors`;
-                    addMessage('system', 'System', msg);
+                    pushMsg('cto', 'system', 'System', msg);
                     refreshTeam();
                 }
-            } catch (e) {
-                addMessage('system', 'System', 'Import error: ' + e.message);
-            }
-            btn.disabled = false;
-            btn.textContent = 'Import All & Assign Agents';
+            } catch (e) { pushMsg('cto', 'system', 'System', 'Import error: ' + e.message); }
+            btn.disabled = false; btn.textContent = 'Import All & Assign Agents';
         }
 
         // --- Modals ---
-        function openModal(name) {
-            document.getElementById(name + 'Modal').classList.add('active');
-        }
-        function closeModal(name) {
-            document.getElementById(name + 'Modal').classList.remove('active');
-        }
+        function openModal(name) { document.getElementById(name + 'Modal').classList.add('active'); }
+        function closeModal(name) { document.getElementById(name + 'Modal').classList.remove('active'); }
 
         // --- Auth ---
-        async function logout() {
-            await api('POST', '/api/auth/logout');
-            window.location.href = '/login';
-        }
+        async function logout() { await api('POST', '/api/auth/logout'); window.location.href = '/login'; }
 
         // --- Init ---
         connectWS();
         refreshTeam();
+        renderChatArea();
     </script>
 </body>
 </html>

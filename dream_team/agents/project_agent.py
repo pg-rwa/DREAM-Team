@@ -2,7 +2,7 @@
 
 import os
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import AsyncIterator, Optional
 
 from .base import Agent, AgentRole, AgentStatus
 
@@ -57,6 +57,12 @@ Provide a summary of what you did when complete."""
 
         # Use interactive mode for actual code changes
         return await self.execute_interactive(prompt, self.workspace_path)
+
+    async def chat_stream(self, user_message: str) -> AsyncIterator[str]:
+        """Stream a conversational response about this project."""
+        system_prompt = self.get_system_prompt()
+        async for chunk in self.stream_anthropic(system_prompt, user_message):
+            yield chunk
 
     async def get_project_status(self) -> str:
         """Get current status of the project (git status, recent changes, etc.)."""

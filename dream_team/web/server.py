@@ -160,6 +160,31 @@ def create_app() -> FastAPI:
         status = await agent.get_project_status()
         return {"project": name, "status": status}
 
+    class AgentChatMessage(BaseModel):
+        message: str
+
+    @app.post("/api/projects/{name}/chat")
+    async def chat_with_agent(name: str, req: AgentChatMessage, _: str = Depends(require_auth)):
+        """Stream a chat response from a project agent."""
+        agent = team.get_agent_for_project(name)
+        if not agent:
+            raise HTTPException(status_code=404, detail=f"No agent for '{name}'")
+
+        async def stream_response():
+            async for chunk in agent.chat_stream(req.message):
+                yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+            yield "data: {\"done\": true}\n\n"
+
+        return StreamingResponse(
+            stream_response(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
     @app.post("/api/projects/{name}/review")
     async def review_project(name: str, _: str = Depends(require_auth)):
         agent = team.get_agent_for_project(name)
