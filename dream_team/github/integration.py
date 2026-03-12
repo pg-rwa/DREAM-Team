@@ -168,3 +168,52 @@ class GitHubManager:
 
     def project_exists_locally(self, repo_name: str) -> bool:
         return (self.workspace_root / repo_name).exists()
+
+    async def create_repo(self, name: str, description: str = "", private: bool = False) -> RepoInfo:
+        """Create a new GitHub repo using the gh CLI."""
+        cmd = ["gh", "repo", "create", name, "--confirm"]
+        if description:
+            cmd.extend(["--description", description])
+        if private:
+            cmd.append("--private")
+        else:
+            cmd.append("--public")
+
+        returncode, stdout, stderr = await self._run_cmd(cmd)
+        if returncode != 0:
+            raise RuntimeError(f"Failed to create repo '{name}': {stderr}")
+
+        # Fetch the newly created repo info
+        info_cmd = ["gh", "repo", "view", name, "--json", "name,nameWithOwner,url,sshUrl,description,defaultBranchRef,primaryLanguage"]
+        rc, info_out, _ = await self._run_cmd(info_cmd)
+
+        if rc == 0 and info_out:
+            try:
+                r = json.loads(info_out)
+                default_branch = "main"
+                if r.get("defaultBranchRef"):
+                    default_branch = r["defaultBranchRef"].get("name", "main")
+                return RepoInfo(
+                    name=r.get("name", name),
+                    full_name=r.get("nameWithOwner", name),
+                    url=r.get("url", ""),
+                    clone_url=r.get("url", ""),
+                    description=r.get("description", "") or "",
+                    default_branch=default_branch,
+                    language=r.get("primaryLanguage", {}).get("name", "") if r.get("primaryLanguage") else "",
+                )
+            except json.JSONDecodeError:
+                pass
+
+        return RepoInfo(name=name, full_name=name, url=stdout.strip(), clone_url=stdout.strip())
+
+    async def get_authenticated_user(self) -> str:
+        """Get the currently authenticated GitHub username."""
+        rc, stdout, _ = await self._run_cmd(["gh", "auth", "status", "--json"])
+        if rc != 0:
+            # Try another way
+            rc, stdout, _ = await self._run_cmd(["gh", "api", "user", "--jq", ".login"])
+            if rc == 0:
+                return stdout.strip()
+            return ""
+        return stdout.strip()

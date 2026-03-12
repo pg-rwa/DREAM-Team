@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from ..config.settings import DreamTeamConfig
+from ..github.integration import GitHubManager
 from ..team import DreamTeam
 from .auth import create_session, get_api_key_display, require_auth, revoke_session, validate_session
 from .workers import TaskWorker
@@ -21,15 +22,17 @@ from .workers import TaskWorker
 # Global state
 team: Optional[DreamTeam] = None
 worker: Optional[TaskWorker] = None
+github: Optional[GitHubManager] = None
 ws_clients: list[WebSocket] = []
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global team, worker
+    global team, worker, github
     config = DreamTeamConfig.load()
     team = DreamTeam(config)
     worker = TaskWorker(team)
+    github = GitHubManager(config.workspace_dir)
     worker_task = asyncio.create_task(worker.run())
     yield
     worker.stop()
@@ -221,6 +224,81 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Task not found")
         worker.enqueue(task_id)
         return {"queued": True, "task_id": task_id}
+
+    # --- GitHub routes ---
+
+    @app.get("/api/github/repos")
+    async def list_github_repos(
+        username: Optional[str] = None,
+        _: str = Depends(require_auth),
+    ):
+        """List GitHub repos for the authenticated user."""
+        repos = await github.list_repos(username or team.config.github_username or None)
+        return {"repos": [r.to_dict() for r in repos]}
+
+    class CreateRepoRequest(BaseModel):
+        name: str
+        description: str = ""
+        private: bool = False
+
+    @app.post("/api/github/repos")
+    async def create_github_repo(req: CreateRepoRequest, _: str = Depends(require_auth)):
+        """Create a new GitHub repo and optionally assign an agent."""
+        repo = await github.create_repo(req.name, req.description, req.private)
+        return {"repo": repo.to_dict()}
+
+    @app.post("/api/github/repos/{repo_name}/assign")
+    async def assign_agent_to_repo(repo_name: str, _: str = Depends(require_auth)):
+        """Fetch a GitHub repo and assign a new agent to it."""
+        # Find repo info from GitHub
+        repos = await github.list_repos(team.config.github_username or None)
+        repo = next((r for r in repos if r.name == repo_name), None)
+        if not repo:
+            raise HTTPException(status_code=404, detail=f"Repo '{repo_name}' not found on GitHub")
+
+        # Add as project with an agent
+        agent = await team.add_project(
+            name=repo.name,
+            repo_url=repo.clone_url,
+            description=repo.description,
+            tech_stack=[repo.language] if repo.language else [],
+            branch=repo.default_branch,
+        )
+        await broadcast({
+            "type": "project_added",
+            "project": repo.name,
+            "agent": agent.to_dict(),
+        })
+        return {"agent": agent.to_dict(), "repo": repo.to_dict()}
+
+    @app.post("/api/github/import-all")
+    async def import_all_repos(
+        exclude: Optional[str] = None,
+        _: str = Depends(require_auth),
+    ):
+        """Import all GitHub repos and assign an agent to each."""
+        exclude_list = [e.strip().lower() for e in (exclude or "").split(",") if e.strip()]
+        repos = await github.list_repos(team.config.github_username or None)
+        results = []
+        for repo in repos:
+            if repo.name.lower() in exclude_list:
+                continue
+            # Skip if already has an agent
+            if team.get_agent_for_project(repo.name):
+                results.append({"repo": repo.name, "status": "already_assigned"})
+                continue
+            try:
+                agent = await team.add_project(
+                    name=repo.name,
+                    repo_url=repo.clone_url,
+                    description=repo.description,
+                    tech_stack=[repo.language] if repo.language else [],
+                    branch=repo.default_branch,
+                )
+                results.append({"repo": repo.name, "status": "assigned", "agent": agent.to_dict()})
+            except Exception as e:
+                results.append({"repo": repo.name, "status": "error", "error": str(e)})
+        return {"results": results}
 
     # --- WebSocket for real-time updates ---
 

@@ -110,49 +110,32 @@ class Agent:
             )
             return error_msg
 
-    async def execute_claude_code_stream(
-        self, prompt: str, working_dir: Optional[str] = None
+    async def stream_anthropic(
+        self, system_prompt: str, user_message: str, model: str = "claude-sonnet-4-20250514"
     ) -> AsyncIterator[str]:
-        """Execute a prompt via Claude Code CLI, yielding chunks as they arrive."""
-        cwd = working_dir or self.workspace_path or os.getcwd()
+        """Stream a response from the Anthropic API directly, yielding text chunks."""
+        import anthropic
 
         self.status = AgentStatus.WORKING
         self.conversation_history.append(
-            AgentMessage(role="user", content=prompt, agent_id=self.agent_id)
+            AgentMessage(role="user", content=user_message, agent_id=self.agent_id)
         )
 
         full_result = []
         try:
-            cmd = [
-                "claude",
-                "--print",
-                "--output-format", "text",
-                prompt,
-            ]
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                cwd=cwd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
+            client = anthropic.AsyncAnthropic()
 
-            while True:
-                chunk = await process.stdout.read(256)
-                if not chunk:
-                    break
-                text = chunk.decode("utf-8", errors="replace")
-                full_result.append(text)
-                yield text
-
-            await process.wait()
+            async with client.messages.stream(
+                model=model,
+                max_tokens=4096,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_message}],
+            ) as stream:
+                async for text in stream.text_stream:
+                    full_result.append(text)
+                    yield text
 
             result = "".join(full_result).strip()
-            if process.returncode != 0 and not result:
-                stderr_out = await process.stderr.read()
-                error = f"Error (exit {process.returncode}): {stderr_out.decode('utf-8', errors='replace').strip()}"
-                yield error
-                result = error
-
             self.conversation_history.append(
                 AgentMessage(role="agent", content=result, agent_id=self.agent_id)
             )
@@ -160,7 +143,7 @@ class Agent:
 
         except Exception as e:
             self.status = AgentStatus.ERROR
-            error_msg = f"Claude Code execution failed: {e}"
+            error_msg = f"Anthropic API error: {e}"
             self.conversation_history.append(
                 AgentMessage(role="system", content=error_msg, agent_id=self.agent_id)
             )

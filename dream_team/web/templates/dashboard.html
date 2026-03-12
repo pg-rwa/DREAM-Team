@@ -309,6 +309,7 @@
         <h1>DREAM TEAM</h1>
         <div class="header-right">
             <span><span class="status-dot"></span> Online</span>
+            <button class="btn" onclick="openModal('github')">GitHub Repos</button>
             <button class="btn" onclick="openModal('addProject')">+ Project</button>
             <button class="btn" onclick="openModal('addTask')">+ Task</button>
             <button class="btn" onclick="logout()">Logout</button>
@@ -431,6 +432,25 @@ Type naturally, e.g.:
             <div class="form-actions">
                 <button class="btn" onclick="closeModal('addTask')">Cancel</button>
                 <button class="btn btn-primary" onclick="createTask()">Create Task</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- GitHub Repos Modal -->
+    <div class="modal-overlay" id="githubModal">
+        <div class="modal" style="max-width: 650px;">
+            <h2>GitHub Repositories</h2>
+            <div style="margin-bottom: 16px; display: flex; gap: 12px;">
+                <button class="btn btn-primary" onclick="loadGithubRepos()" id="loadReposBtn">Load Repos</button>
+                <button class="btn" onclick="importAllRepos()" id="importAllBtn">Import All & Assign Agents</button>
+            </div>
+            <div id="githubReposList" style="max-height: 400px; overflow-y: auto;">
+                <div style="color: var(--text-dim); font-size: 13px; padding: 8px;">
+                    Click "Load Repos" to fetch your GitHub repositories.
+                </div>
+            </div>
+            <div class="form-actions">
+                <button class="btn" onclick="closeModal('github')">Close</button>
             </div>
         </div>
     </div>
@@ -679,6 +699,80 @@ Type naturally, e.g.:
             } catch (e) {
                 addMessage('system', 'System', 'Error: ' + e.message);
             }
+        }
+
+        // --- GitHub ---
+        async function loadGithubRepos() {
+            const el = document.getElementById('githubReposList');
+            const btn = document.getElementById('loadReposBtn');
+            btn.disabled = true;
+            el.innerHTML = '<div style="color:var(--text-dim);font-size:13px;padding:8px;">Loading repos...</div>';
+
+            try {
+                const data = await api('GET', '/api/github/repos');
+                if (!data || !data.repos || data.repos.length === 0) {
+                    el.innerHTML = '<div style="color:var(--text-dim);font-size:13px;padding:8px;">No repos found. Make sure gh CLI is authenticated on the server.</div>';
+                    btn.disabled = false;
+                    return;
+                }
+                el.innerHTML = data.repos.map(r => `
+                    <div class="task-item">
+                        <div class="task-title">
+                            <strong>${escapeHtml(r.name)}</strong>
+                            <span style="color:var(--text-dim);font-size:11px;margin-left:8px;">${escapeHtml(r.language || '')}</span>
+                            <div style="font-size:11px;color:var(--text-dim);margin-top:2px;">${escapeHtml(r.description || 'No description')}</div>
+                        </div>
+                        <button class="btn btn-sm" onclick="assignAgent('${escapeHtml(r.name)}', this)">Assign Agent</button>
+                    </div>
+                `).join('');
+            } catch (e) {
+                el.innerHTML = `<div style="color:var(--red);font-size:13px;padding:8px;">Error: ${e.message}</div>`;
+            }
+            btn.disabled = false;
+        }
+
+        async function assignAgent(repoName, btn) {
+            btn.disabled = true;
+            btn.textContent = 'Assigning...';
+            try {
+                const data = await api('POST', `/api/github/repos/${repoName}/assign`);
+                if (data && data.agent) {
+                    btn.textContent = 'Assigned';
+                    btn.style.borderColor = 'var(--green)';
+                    btn.style.color = 'var(--green)';
+                    addMessage('system', 'System', `Agent "${data.agent.name}" assigned to ${repoName}`);
+                    refreshTeam();
+                }
+            } catch (e) {
+                btn.textContent = 'Error';
+                btn.style.color = 'var(--red)';
+            }
+        }
+
+        async function importAllRepos() {
+            const btn = document.getElementById('importAllBtn');
+            btn.disabled = true;
+            btn.textContent = 'Importing...';
+            closeModal('github');
+            addMessage('system', 'System', 'Importing all GitHub repos and assigning agents...');
+
+            try {
+                const data = await api('POST', '/api/github/import-all?exclude=dream-team');
+                if (data && data.results) {
+                    const assigned = data.results.filter(r => r.status === 'assigned');
+                    const existing = data.results.filter(r => r.status === 'already_assigned');
+                    const errors = data.results.filter(r => r.status === 'error');
+                    let msg = `Import complete: ${assigned.length} new agents assigned`;
+                    if (existing.length) msg += `, ${existing.length} already had agents`;
+                    if (errors.length) msg += `, ${errors.length} errors`;
+                    addMessage('system', 'System', msg);
+                    refreshTeam();
+                }
+            } catch (e) {
+                addMessage('system', 'System', 'Import error: ' + e.message);
+            }
+            btn.disabled = false;
+            btn.textContent = 'Import All & Assign Agents';
         }
 
         // --- Modals ---
