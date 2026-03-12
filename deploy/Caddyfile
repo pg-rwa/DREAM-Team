@@ -1,0 +1,6 @@
+# Replace with your domain
+# dream.yourdomain.com automatically gets HTTPS via Let's Encrypt
+
+dream.yourdomain.com {
+    reverse_proxy localhost:8000
+}

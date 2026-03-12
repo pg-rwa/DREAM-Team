@@ -1,0 +1,16 @@
+services:
+  dream-team:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persist config and project data
+      - dream-data:/root/.dream-team
+      # Pass Anthropic API key
+      - ${HOME}/.claude:/root/.claude:ro
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    restart: unless-stopped
+
+volumes:
+  dream-data:

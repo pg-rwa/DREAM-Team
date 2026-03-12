@@ -160,15 +160,99 @@ Config is stored at `~/.dream-team/config.json`:
 
 Project repos are cloned to `~/.dream-team/projects/`.
 
+## Web Dashboard (Server Mode)
+
+Access DREAM Team from any device via a web browser.
+
+### Local
+
+```bash
+# Start the web server
+dream-server
+# or
+python -m dream_team.web.run
+
+# First run prints your API key
+# Open http://localhost:8000 and enter the key
+```
+
+### Deploy to DigitalOcean
+
+**Option A: Quick setup on a $12/mo droplet (2GB RAM, Ubuntu 22.04)**
+
+```bash
+# SSH into your droplet
+ssh root@your-droplet-ip
+
+# Clone and run setup
+git clone https://github.com/pg-rwa/DREAM-Team.git /opt/dream-team
+cd /opt/dream-team
+chmod +x deploy/setup.sh
+./deploy/setup.sh
+
+# Set your Anthropic API key
+echo 'Environment=ANTHROPIC_API_KEY=sk-ant-...' >> /etc/systemd/system/dream-team.service
+systemctl daemon-reload
+systemctl start dream-team
+
+# Get your login key
+python3 -m dream_team.web.run --show-key
+```
+
+**Option B: Docker**
+
+```bash
+# Set your API key
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# Build and run
+docker compose up -d
+
+# Get your login key
+docker compose exec dream-team python3 -m dream_team.web.run --show-key
+```
+
+**Add HTTPS (recommended):**
+
+```bash
+apt install caddy
+# Edit /etc/caddy/Caddyfile:
+#   dream.yourdomain.com { reverse_proxy localhost:8000 }
+systemctl restart caddy
+```
+
+### Web API
+
+All endpoints require authentication (Bearer token or session cookie).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/auth/login` | Login with API key |
+| GET | `/api/team/status` | Full team status |
+| POST | `/api/cto/talk` | Talk to the CTO |
+| GET | `/api/projects` | List projects |
+| POST | `/api/projects` | Add project |
+| GET | `/api/projects/{name}/status` | Project status |
+| GET | `/api/tasks` | List tasks |
+| POST | `/api/tasks` | Create task |
+| POST | `/api/tasks/{id}/execute` | Execute task |
+| WS | `/ws` | Real-time updates |
+
 ## Project Structure
 
 ```
 DREAM-Team/
-├── dream.py                 # Entry point
+├── dream.py                 # CLI entry point
 ├── pyproject.toml           # Package config
+├── Dockerfile               # Container build
+├── docker-compose.yml       # Docker orchestration
+├── deploy/
+│   ├── setup.sh             # DO droplet setup script
+│   ├── dream-team.service   # systemd service file
+│   └── Caddyfile            # HTTPS reverse proxy config
 ├── dream_team/
 │   ├── __init__.py
-│   ├── cli.py               # Interactive CLI (the single interface)
+│   ├── cli.py               # Interactive CLI
 │   ├── team.py              # Team orchestrator
 │   ├── agents/
 │   │   ├── base.py          # Base agent with Claude Code execution
@@ -180,8 +264,16 @@ DREAM-Team/
 │   │   └── integration.py   # GitHub repo operations
 │   ├── tasks/
 │   │   └── manager.py       # Task tracking & queue
-│   └── ui/
-│       └── dashboard.py     # Terminal dashboard UI
+│   ├── ui/
+│   │   └── dashboard.py     # Terminal dashboard UI
+│   └── web/
+│       ├── server.py         # FastAPI app + API endpoints
+│       ├── auth.py           # API key + session auth
+│       ├── workers.py        # Background task processor
+│       ├── run.py            # Web server launcher
+│       └── templates/
+│           ├── login.html    # Login page
+│           └── dashboard.html # Web dashboard
 ```
 
 ## License

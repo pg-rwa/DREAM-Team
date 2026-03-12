@@ -1,0 +1,16 @@
+[Unit]
+Description=DREAM Team AI Agent Manager
+After=network.target
+
+[Service]
+Type=simple
+User=dream
+WorkingDirectory=/opt/dream-team
+ExecStart=/usr/bin/python3 -m dream_team.web.run --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+Environment=HOME=/home/dream
+
+[Install]
+WantedBy=multi-user.target
