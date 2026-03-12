@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "dream-team"
+version = "0.1.0"
+description = "DREAM Team - AI Agent Team Manager powered by Claude Code"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "DREAM Team"}]
+keywords = ["ai", "agents", "claude", "team", "automation"]
+
+[project.scripts]
+dream = "dream_team.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["dream_team*"]
