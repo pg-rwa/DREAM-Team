@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import AsyncIterator, Optional
 
 
 class AgentRole(str, Enum):
@@ -109,6 +109,62 @@ class Agent:
                 AgentMessage(role="system", content=error_msg, agent_id=self.agent_id)
             )
             return error_msg
+
+    async def execute_claude_code_stream(
+        self, prompt: str, working_dir: Optional[str] = None
+    ) -> AsyncIterator[str]:
+        """Execute a prompt via Claude Code CLI, yielding chunks as they arrive."""
+        cwd = working_dir or self.workspace_path or os.getcwd()
+
+        self.status = AgentStatus.WORKING
+        self.conversation_history.append(
+            AgentMessage(role="user", content=prompt, agent_id=self.agent_id)
+        )
+
+        full_result = []
+        try:
+            cmd = [
+                "claude",
+                "--print",
+                "--output-format", "text",
+                prompt,
+            ]
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                cwd=cwd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
+            while True:
+                chunk = await process.stdout.read(256)
+                if not chunk:
+                    break
+                text = chunk.decode("utf-8", errors="replace")
+                full_result.append(text)
+                yield text
+
+            await process.wait()
+
+            result = "".join(full_result).strip()
+            if process.returncode != 0 and not result:
+                stderr_out = await process.stderr.read()
+                error = f"Error (exit {process.returncode}): {stderr_out.decode('utf-8', errors='replace').strip()}"
+                yield error
+                result = error
+
+            self.conversation_history.append(
+                AgentMessage(role="agent", content=result, agent_id=self.agent_id)
+            )
+            self.status = AgentStatus.IDLE
+
+        except Exception as e:
+            self.status = AgentStatus.ERROR
+            error_msg = f"Claude Code execution failed: {e}"
+            self.conversation_history.append(
+                AgentMessage(role="system", content=error_msg, agent_id=self.agent_id)
+            )
+            yield error_msg
 
     async def execute_interactive(
         self, prompt: str, working_dir: Optional[str] = None

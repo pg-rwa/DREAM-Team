@@ -137,6 +137,12 @@ class DreamTeam:
         team_context = self.get_team_context()
         return await self.cto.analyze_request(message, team_context)
 
+    async def delegate_to_cto_stream(self, message: str):
+        """Stream the CTO's response to a message."""
+        team_context = self.get_team_context()
+        async for chunk in self.cto.analyze_request_stream(message, team_context):
+            yield chunk
+
     async def execute_task_on_project(
         self, project_name: str, task_description: str
     ) -> str:

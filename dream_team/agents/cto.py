@@ -4,6 +4,8 @@ import json
 from dataclasses import dataclass, field
 from typing import Optional
 
+from typing import AsyncIterator
+
 from .base import Agent, AgentRole, AgentStatus
 
 
@@ -76,6 +78,16 @@ Founder's message: {user_message}
 
 Analyze this request and respond with your plan."""
         return await self.execute_claude_code(prompt)
+
+    async def analyze_request_stream(self, user_message: str, team_context: str) -> AsyncIterator[str]:
+        """Stream the CTO's analysis of a user request."""
+        prompt = f"""{self.get_system_prompt(team_context)}
+
+Founder's message: {user_message}
+
+Analyze this request and respond with your plan."""
+        async for chunk in self.execute_claude_code_stream(prompt):
+            yield chunk
 
     def to_dict(self) -> dict:
         data = super().to_dict()

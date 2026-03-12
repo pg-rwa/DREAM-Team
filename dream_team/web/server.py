@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -93,8 +93,21 @@ def create_app() -> FastAPI:
 
     @app.post("/api/cto/talk")
     async def talk_to_cto(req: CTOMessage, _: str = Depends(require_auth)):
-        response = await team.delegate_to_cto(req.message)
-        return {"response": response}
+        async def stream_response():
+            async for chunk in team.delegate_to_cto_stream(req.message):
+                # Send as Server-Sent Events format
+                yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+            yield "data: {\"done\": true}\n\n"
+
+        return StreamingResponse(
+            stream_response(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     # --- Project routes ---
 
