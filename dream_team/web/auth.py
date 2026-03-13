@@ -2,6 +2,7 @@
 
 import hashlib
 import hmac
+import json
 import os
 import secrets
 import time
@@ -13,17 +14,47 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 
 AUTH_CONFIG_PATH = Path(os.path.expanduser("~/.dream-team/auth.json"))
+SESSIONS_PATH = Path(os.path.expanduser("~/.dream-team/sessions.json"))
 SESSION_EXPIRY = 86400 * 7  # 7 days
 
-# In-memory session store (persists across requests, resets on restart)
+# Session store — loaded from disk on startup, saved on every change
 _sessions: dict[str, dict] = {}
 
 security = HTTPBearer(auto_error=False)
 
 
+def _load_sessions() -> None:
+    """Load sessions from disk."""
+    global _sessions
+    if SESSIONS_PATH.exists():
+        try:
+            data = json.loads(SESSIONS_PATH.read_text())
+            # Prune expired sessions on load
+            now = time.time()
+            _sessions = {
+                k: v for k, v in data.items()
+                if now - v.get("created_at", 0) < SESSION_EXPIRY
+            }
+        except (json.JSONDecodeError, KeyError):
+            _sessions = {}
+
+
+def _save_sessions() -> None:
+    """Persist sessions to disk."""
+    SESSIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SESSIONS_PATH.write_text(json.dumps(_sessions, indent=2))
+    try:
+        SESSIONS_PATH.chmod(0o600)
+    except OSError:
+        pass
+
+
+# Load on module import
+_load_sessions()
+
+
 def _get_api_key() -> str:
     """Get or create the API key."""
-    import json
     AUTH_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     if AUTH_CONFIG_PATH.exists():
@@ -52,6 +83,7 @@ def create_session(api_key: str) -> Optional[str]:
         "created_at": time.time(),
         "last_active": time.time(),
     }
+    _save_sessions()
     return session_token
 
 
@@ -62,6 +94,7 @@ def validate_session(token: str) -> bool:
         return False
     if time.time() - session["created_at"] > SESSION_EXPIRY:
         _sessions.pop(token, None)
+        _save_sessions()
         return False
     session["last_active"] = time.time()
     return True
@@ -69,6 +102,7 @@ def validate_session(token: str) -> bool:
 
 def revoke_session(token: str) -> None:
     _sessions.pop(token, None)
+    _save_sessions()
 
 
 async def require_auth(

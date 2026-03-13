@@ -103,6 +103,10 @@ def create_app() -> FastAPI:
     async def list_conversations(_: str = Depends(require_auth)):
         return {"conversations": team.conversations.list_all()}
 
+    @app.get("/api/conversations/archived")
+    async def list_archived_conversations(_: str = Depends(require_auth)):
+        return {"conversations": team.conversations.list_archived()}
+
     @app.post("/api/conversations")
     async def create_conversation(req: CreateConversationRequest, _: str = Depends(require_auth)):
         conv = team.conversations.create(title=req.title, project=req.project)
@@ -116,7 +120,20 @@ def create_app() -> FastAPI:
         return {"conversation": conv.to_dict()}
 
     @app.delete("/api/conversations/{conv_id}")
-    async def delete_conversation(conv_id: str, _: str = Depends(require_auth)):
+    async def archive_conversation(conv_id: str, _: str = Depends(require_auth)):
+        # Archive instead of permanent delete
+        if not team.conversations.archive(conv_id):
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        return {"ok": True}
+
+    @app.post("/api/conversations/{conv_id}/restore")
+    async def restore_conversation(conv_id: str, _: str = Depends(require_auth)):
+        if not team.conversations.restore(conv_id):
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        return {"ok": True}
+
+    @app.delete("/api/conversations/{conv_id}/permanent")
+    async def permanent_delete_conversation(conv_id: str, _: str = Depends(require_auth)):
         if not team.conversations.delete(conv_id):
             raise HTTPException(status_code=404, detail="Conversation not found")
         return {"ok": True}

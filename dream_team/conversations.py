@@ -30,6 +30,7 @@ class Conversation:
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
     messages: list[Message] = field(default_factory=list)
+    archived: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -39,6 +40,7 @@ class Conversation:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "messages": [m.to_dict() for m in self.messages],
+            "archived": self.archived,
         }
 
     def to_summary(self) -> dict:
@@ -51,6 +53,7 @@ class Conversation:
             "updated_at": self.updated_at,
             "message_count": len(self.messages),
             "last_message": self.messages[-1].content[:100] if self.messages else None,
+            "archived": self.archived,
         }
 
     @classmethod
@@ -63,6 +66,7 @@ class Conversation:
             created_at=data.get("created_at", ""),
             updated_at=data.get("updated_at", ""),
             messages=messages,
+            archived=data.get("archived", False),
         )
 
     def add_message(self, role: str, content: str) -> Message:
@@ -118,9 +122,38 @@ class ConversationManager:
         return self.conversations.get(conv_id)
 
     def list_all(self) -> list[dict]:
-        """Return conversation summaries sorted by most recent."""
-        convs = sorted(self.conversations.values(), key=lambda c: c.updated_at, reverse=True)
+        """Return active (non-archived) conversation summaries sorted by most recent."""
+        convs = sorted(
+            (c for c in self.conversations.values() if not c.archived),
+            key=lambda c: c.updated_at, reverse=True,
+        )
         return [c.to_summary() for c in convs]
+
+    def list_archived(self) -> list[dict]:
+        """Return archived conversation summaries sorted by most recent."""
+        convs = sorted(
+            (c for c in self.conversations.values() if c.archived),
+            key=lambda c: c.updated_at, reverse=True,
+        )
+        return [c.to_summary() for c in convs]
+
+    def archive(self, conv_id: str) -> bool:
+        """Archive a conversation (soft delete)."""
+        conv = self.conversations.get(conv_id)
+        if not conv:
+            return False
+        conv.archived = True
+        self._save()
+        return True
+
+    def restore(self, conv_id: str) -> bool:
+        """Restore an archived conversation."""
+        conv = self.conversations.get(conv_id)
+        if not conv:
+            return False
+        conv.archived = False
+        self._save()
+        return True
 
     def add_message(self, conv_id: str, role: str, content: str) -> Optional[Message]:
         conv = self.conversations.get(conv_id)
@@ -146,7 +179,7 @@ class ConversationManager:
         lines = []
         count = 0
         for c in convs:
-            if c.id == exclude_conv_id or not c.messages:
+            if c.id == exclude_conv_id or not c.messages or c.archived:
                 continue
             if count >= max_convs:
                 break
