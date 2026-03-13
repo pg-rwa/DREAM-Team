@@ -3,6 +3,8 @@
 import asyncio
 import json
 import os
+import subprocess
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -24,11 +26,34 @@ team: Optional[DreamTeam] = None
 worker: Optional[TaskWorker] = None
 github: Optional[GitHubManager] = None
 ws_clients: list[WebSocket] = []
+_server_start_time: float = 0.0
+_deploy_info: dict = {}
+
+
+def _get_deploy_info() -> dict:
+    """Capture git and deployment info at startup."""
+    info = {"started_at": "", "git_commit": "", "git_branch": "", "git_summary": ""}
+    try:
+        info["git_commit"] = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], text=True, timeout=5
+        ).strip()
+        info["git_branch"] = subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"], text=True, timeout=5
+        ).strip()
+        info["git_summary"] = subprocess.check_output(
+            ["git", "log", "-1", "--format=%s"], text=True, timeout=5
+        ).strip()
+    except Exception:
+        pass
+    return info
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global team, worker, github
+    global team, worker, github, _server_start_time, _deploy_info
+    _server_start_time = time.time()
+    _deploy_info = _get_deploy_info()
+    _deploy_info["started_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     config = DreamTeamConfig.load()
     team = DreamTeam(config)
     worker = TaskWorker(team, broadcast_fn=broadcast)
@@ -82,6 +107,21 @@ def create_app() -> FastAPI:
             revoke_session(token)
         response.delete_cookie("dream_session")
         return {"ok": True}
+
+    # --- Health / deployment info ---
+
+    @app.get("/api/health")
+    async def health(_: str = Depends(require_auth)):
+        uptime_secs = int(time.time() - _server_start_time)
+        mins, secs = divmod(uptime_secs, 60)
+        hours, mins = divmod(mins, 60)
+        uptime_str = f"{hours}h {mins}m {secs}s" if hours else f"{mins}m {secs}s"
+        return {
+            "status": "running",
+            "uptime": uptime_str,
+            "uptime_seconds": uptime_secs,
+            **_deploy_info,
+        }
 
     # --- Team routes ---
 

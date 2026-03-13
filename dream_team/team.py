@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import subprocess
+import time
 from typing import AsyncIterator, Optional
 
 from .agents import CTOAgent, ProjectAgent, AgentRole, AgentStatus
@@ -184,6 +186,38 @@ class DreamTeam:
             lines.append(line)
         return "\n".join(lines)
 
+    def get_deployment_context(self) -> str:
+        """Build context about the current deployment state."""
+        # Check git status of each project workspace
+        lines = []
+        for agent in self.agents.values():
+            ws = agent.workspace_path
+            if not ws or not Path(ws).exists():
+                lines.append(f"- {agent.repo_name}: workspace not found")
+                continue
+            try:
+                head = subprocess.check_output(
+                    ["git", "log", "-1", "--format=%h %s (%ar)"],
+                    cwd=ws, text=True, timeout=5,
+                ).strip()
+                branch = subprocess.check_output(
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                    cwd=ws, text=True, timeout=5,
+                ).strip()
+                # Check for uncommitted changes
+                diff = subprocess.check_output(
+                    ["git", "status", "--porcelain"],
+                    cwd=ws, text=True, timeout=5,
+                ).strip()
+                dirty = f" ({len(diff.splitlines())} uncommitted changes)" if diff else ""
+                lines.append(f"- {agent.repo_name}: branch={branch}, latest={head}{dirty}")
+            except Exception:
+                lines.append(f"- {agent.repo_name}: unable to read git status")
+
+        if not lines:
+            return ""
+        return "\n".join(lines)
+
     async def delegate_to_cto(self, message: str) -> str:
         """Send a message to the CTO for analysis and delegation."""
         team_context = self.get_team_context()
@@ -258,11 +292,12 @@ class DreamTeam:
 
         task_results = self.get_task_results_context()
         active_progress = self.get_active_progress_context()
+        deployment_status = self.get_deployment_context()
 
         full_response = []
         async for chunk in self.cto.analyze_request_stream(
             message, team_context, project_scope, conversation_messages,
-            conversation_summaries, task_results, active_progress,
+            conversation_summaries, task_results, active_progress, deployment_status,
         ):
             full_response.append(chunk)
             yield chunk

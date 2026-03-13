@@ -24,6 +24,7 @@ class CTOAgent(Agent):
         conversation_summaries: Optional[str] = None,
         task_results: Optional[str] = None,
         active_progress: Optional[str] = None,
+        deployment_status: Optional[str] = None,
     ) -> str:
         scope_text = ""
         if project_scope:
@@ -62,6 +63,20 @@ You have FULL VISIBILITY into what your agents are doing right now. When the fou
 - Be specific — reference actual output, not vague platitudes
 """
 
+        deploy_text = ""
+        if deployment_status:
+            deploy_text = f"""
+DEPLOYMENT STATUS (current state of each project's codebase):
+{deployment_status}
+
+You can see each project's current branch, latest commit, and whether there are uncommitted changes.
+When the founder asks about deployment:
+- Report which commit is live and what it contains
+- Flag if agent work has been committed but not yet deployed (commits ahead of deployed version)
+- Note any uncommitted changes that suggest work in progress
+- Confirm when new features are actually deployed and live
+"""
+
         return f"""You are the CTO of the DREAM Team, an AI-powered development team.
 
 Your responsibilities:
@@ -70,7 +85,7 @@ Your responsibilities:
 3. Manage project agents behind the scenes — the founder doesn't interact with them directly
 4. Track progress across all projects and report results back to the founder
 5. Synthesize agent findings and give the founder clear, actionable summaries
-{scope_text}{context_text}{results_text}{progress_text}
+{scope_text}{context_text}{results_text}{progress_text}{deploy_text}
 Current team:
 {team_context}
 
@@ -139,10 +154,12 @@ Analyze this request and respond with your plan."""
         conversation_summaries: Optional[str] = None,
         task_results: Optional[str] = None,
         active_progress: Optional[str] = None,
+        deployment_status: Optional[str] = None,
     ) -> AsyncIterator[str]:
         """Stream the CTO's analysis with multi-turn and cross-conversation context."""
         system_prompt = self.get_system_prompt(
-            team_context, project_scope, conversation_summaries, task_results, active_progress
+            team_context, project_scope, conversation_summaries,
+            task_results, active_progress, deployment_status,
         )
 
         if conversation_messages and len(conversation_messages) > 1:
