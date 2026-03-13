@@ -1,6 +1,7 @@
 """CTO Agent - The team leader who delegates work to project agents."""
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import AsyncIterator, Optional
 
@@ -9,27 +10,31 @@ from .base import Agent, AgentRole, AgentStatus
 
 @dataclass
 class CTOAgent(Agent):
-    """The CTO oversees all project agents and delegates tasks.
-
-    The CTO:
-    - Receives high-level ideas/feedback from the user
-    - Breaks them down into actionable tasks
-    - Assigns tasks to the appropriate project agents
-    - Monitors progress and reports back
-    - Can spin up new project agents for new projects
-    """
+    """The CTO oversees all project agents and delegates tasks."""
 
     name: str = "CTO"
     role: AgentRole = AgentRole.CTO
     description: str = "Chief Technology Officer - oversees all projects and delegates to agents"
     managed_agents: dict[str, str] = field(default_factory=dict)  # agent_id -> project_name
 
-    def get_system_prompt(self, team_context: str = "", project_scope: Optional[str] = None) -> str:
+    def get_system_prompt(
+        self,
+        team_context: str = "",
+        project_scope: Optional[str] = None,
+        conversation_summaries: Optional[str] = None,
+    ) -> str:
         scope_text = ""
         if project_scope:
             scope_text = f"""
-This conversation is focused on the project: {project_scope}
+This conversation is focused on the project: **{project_scope}**
 Keep your responses relevant to this project. You have agents working on it behind the scenes.
+"""
+
+        context_text = ""
+        if conversation_summaries:
+            context_text = f"""
+Recent activity across other conversations (for reference):
+{conversation_summaries}
 """
 
         return f"""You are the CTO of the DREAM Team, an AI-powered development team.
@@ -40,34 +45,32 @@ Your responsibilities:
 3. Manage project agents behind the scenes — the founder doesn't interact with them directly
 4. Track progress across all projects
 5. Report status updates to the founder
-6. Recommend when to create new agents for new projects
-{scope_text}
+{scope_text}{context_text}
 Current team:
 {team_context}
 
-When the founder gives you an instruction:
-- Analyze what needs to be done
-- Identify which project(s) are affected
-- Create clear, specific task descriptions
-- Delegate appropriately to your agents
+IMPORTANT - How to delegate work:
+When the founder asks you to build, fix, or change something, you MUST delegate to your agents.
+Include a JSON task block in your response using this exact format:
 
-When delegating tasks, respond with a structured plan in this JSON format:
-{{
-    "analysis": "Your understanding of the request",
-    "tasks": [
-        {{
-            "project": "project_name",
-            "agent_id": "agent_id or 'new' if new agent needed",
-            "title": "task title",
-            "description": "detailed task description",
-            "priority": "high/medium/low"
-        }}
-    ],
-    "notes": "Any additional context or questions for the founder"
-}}
+```tasks
+[
+  {{
+    "project": "project-name",
+    "title": "short task title",
+    "description": "detailed description of what the agent should do",
+    "priority": "high"
+  }}
+]
+```
 
-If the request is a question or needs discussion, respond conversationally.
-If the request needs clarification, ask specific questions."""
+Rules for delegation:
+- Use the exact project name from "Current team" above
+- The agent will execute the task autonomously using Claude Code
+- You can delegate multiple tasks at once
+- If no matching project exists, tell the founder to add it first
+- For questions, status checks, or discussion — just respond conversationally, no task block needed
+- Always explain what you're delegating and why before the task block"""
 
     def register_agent(self, agent_id: str, project_name: str) -> None:
         self.managed_agents[agent_id] = project_name
@@ -75,8 +78,25 @@ If the request needs clarification, ask specific questions."""
     def unregister_agent(self, agent_id: str) -> None:
         self.managed_agents.pop(agent_id, None)
 
+    @staticmethod
+    def extract_tasks(response: str) -> list[dict]:
+        """Parse task blocks from CTO response text."""
+        # Look for ```tasks ... ``` blocks
+        pattern = r'```tasks\s*\n(.*?)```'
+        matches = re.findall(pattern, response, re.DOTALL)
+        tasks = []
+        for match in matches:
+            try:
+                parsed = json.loads(match.strip())
+                if isinstance(parsed, list):
+                    tasks.extend(parsed)
+                elif isinstance(parsed, dict):
+                    tasks.append(parsed)
+            except json.JSONDecodeError:
+                continue
+        return tasks
+
     async def analyze_request(self, user_message: str, team_context: str) -> str:
-        """Have the CTO analyze a user request and produce a delegation plan."""
         prompt = f"""{self.get_system_prompt(team_context)}
 
 Founder's message: {user_message}
@@ -90,20 +110,16 @@ Analyze this request and respond with your plan."""
         team_context: str,
         project_scope: Optional[str] = None,
         conversation_messages: Optional[list[dict]] = None,
+        conversation_summaries: Optional[str] = None,
     ) -> AsyncIterator[str]:
-        """Stream the CTO's analysis using the Anthropic API directly.
-
-        Supports multi-turn conversations by passing prior messages.
-        """
-        system_prompt = self.get_system_prompt(team_context, project_scope)
+        """Stream the CTO's analysis with multi-turn and cross-conversation context."""
+        system_prompt = self.get_system_prompt(team_context, project_scope, conversation_summaries)
 
         if conversation_messages and len(conversation_messages) > 1:
-            # Multi-turn: use full conversation history
             async for chunk in self.stream_anthropic_multi(system_prompt, conversation_messages):
                 yield chunk
         else:
-            # Single turn fallback
-            user_prompt = f"Founder's message: {user_message}\n\nAnalyze this request and respond with your plan."
+            user_prompt = f"Founder's message: {user_message}"
             async for chunk in self.stream_anthropic(system_prompt, user_prompt):
                 yield chunk
 

@@ -23,6 +23,8 @@ class DreamTeam:
         self.cto = CTOAgent(name=self.config.cto_name)
         self.agents: dict[str, ProjectAgent] = {}
         self.conversations = ConversationManager(Path(self.config.config_dir))
+        self._task_worker = None  # Set by server after init
+        self._broadcast_fn = None  # Set by server after init
         self._load_agents()
 
     def _load_agents(self) -> None:
@@ -61,7 +63,7 @@ class DreamTeam:
 
             lines.append(
                 f"  - {agent.name} ({agent.agent_id}) {status_icon}: "
-                f"{agent.repo_name} | {len(active)} active tasks"
+                f"project=\"{agent.repo_name}\" | {len(active)} active tasks"
             )
 
         return "\n".join(lines)
@@ -136,15 +138,58 @@ class DreamTeam:
         team_context = self.get_team_context()
         return await self.cto.analyze_request(message, team_context)
 
+    def _process_cto_tasks(self, response_text: str, conversation_id: Optional[str] = None) -> list[dict]:
+        """Parse CTO response for task blocks and auto-delegate to agents."""
+        tasks_data = CTOAgent.extract_tasks(response_text)
+        created = []
+
+        for td in tasks_data:
+            project = td.get("project", "")
+            title = td.get("title", "Untitled task")
+            description = td.get("description", title)
+            priority_str = td.get("priority", "medium")
+
+            agent = self.get_agent_for_project(project)
+            if not agent:
+                created.append({"project": project, "title": title, "status": "no_agent"})
+                continue
+
+            try:
+                priority = TaskPriority(priority_str)
+            except ValueError:
+                priority = TaskPriority.MEDIUM
+
+            task = self.task_manager.create_task(
+                title=title,
+                description=description,
+                project=project,
+                priority=priority,
+                assigned_agent_id=agent.agent_id,
+            )
+
+            # Auto-execute via worker
+            if self._task_worker:
+                self._task_worker.enqueue(task.task_id)
+
+            created.append({
+                "project": project,
+                "title": title,
+                "task_id": task.task_id,
+                "status": "queued",
+            })
+
+        return created
+
     async def delegate_to_cto_stream(
         self, message: str, conversation_id: Optional[str] = None
     ) -> AsyncIterator[str]:
-        """Stream the CTO's response, with conversation context."""
+        """Stream the CTO's response, with conversation context and auto-delegation."""
         team_context = self.get_team_context()
 
         conv = None
         project_scope = None
         conversation_messages = None
+        conversation_summaries = None
 
         if conversation_id:
             conv = self.conversations.get(conversation_id)
@@ -154,17 +199,50 @@ class DreamTeam:
                 self.conversations.add_message(conversation_id, "user", message)
                 # Get formatted messages for multi-turn
                 conversation_messages = conv.get_anthropic_messages()
+                # Get cross-conversation context
+                conversation_summaries = self.conversations.get_cross_context(
+                    exclude_conv_id=conversation_id
+                )
 
         full_response = []
         async for chunk in self.cto.analyze_request_stream(
-            message, team_context, project_scope, conversation_messages
+            message, team_context, project_scope, conversation_messages, conversation_summaries
         ):
             full_response.append(chunk)
             yield chunk
 
+        response_text = "".join(full_response)
+
         # Save CTO response to conversation
         if conv:
-            self.conversations.add_message(conversation_id, "cto", "".join(full_response))
+            self.conversations.add_message(conversation_id, "cto", response_text)
+
+        # Parse and auto-delegate tasks from CTO response
+        created_tasks = self._process_cto_tasks(response_text, conversation_id)
+        if created_tasks:
+            # Stream a system note about delegated tasks
+            queued = [t for t in created_tasks if t["status"] == "queued"]
+            failed = [t for t in created_tasks if t["status"] == "no_agent"]
+            parts = []
+            if queued:
+                names = ", ".join(f'"{t["title"]}"' for t in queued)
+                parts.append(f"\n\n---\n**Delegated {len(queued)} task(s):** {names}")
+            if failed:
+                names = ", ".join(f'"{t["title"]}" (no agent for {t["project"]})' for t in failed)
+                parts.append(f"\n**Could not delegate:** {names}")
+            if parts:
+                note = "".join(parts)
+                yield note
+                # Also save the delegation note
+                if conv:
+                    self.conversations.add_message(conversation_id, "system", note.strip())
+                # Broadcast task updates
+                if self._broadcast_fn:
+                    for t in queued:
+                        await self._broadcast_fn({
+                            "type": "task_started",
+                            "task": {"task_id": t["task_id"], "title": t["title"], "project": t["project"]},
+                        })
 
     async def execute_task_on_project(
         self, project_name: str, task_description: str
@@ -190,6 +268,62 @@ class DreamTeam:
             error = str(e)
             self.task_manager.fail_task(task.task_id, error)
             return f"Task failed: {error}"
+
+    async def ensure_self_project(self) -> None:
+        """Register the DREAM-Team repo itself so the CTO can self-manage."""
+        if self.get_agent_for_project("DREAM-Team"):
+            return  # Already registered
+
+        # Find the repo path — either /opt/dream-team or the git root
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                cwd="/opt/dream-team",
+                capture_output=True, text=True,
+            )
+            repo_path = result.stdout.strip() if result.returncode == 0 else "/opt/dream-team"
+        except Exception:
+            repo_path = "/opt/dream-team"
+
+        # Get the remote URL
+        try:
+            result = subprocess.run(
+                ["git", "remote", "get-url", "origin"],
+                cwd=repo_path,
+                capture_output=True, text=True,
+            )
+            repo_url = result.stdout.strip() if result.returncode == 0 else ""
+        except Exception:
+            repo_url = ""
+
+        if not repo_url:
+            return  # Can't determine repo URL, skip
+
+        from .agents import ProjectAgent
+        agent = ProjectAgent(
+            name="Agent-DREAM-Team",
+            repo_url=repo_url,
+            repo_name="DREAM-Team",
+            tech_stack=["python", "fastapi", "html", "javascript"],
+            project_description="The DREAM Team platform itself - AI Agent Team Manager",
+            branch="main",
+            workspace_path=repo_path,
+        )
+
+        project_config = ProjectConfig(
+            name="DREAM-Team",
+            repo_url=repo_url,
+            description="The DREAM Team platform itself",
+            tech_stack=["python", "fastapi", "html", "javascript"],
+            branch="main",
+            agent_name=agent.name,
+        )
+
+        self.config.add_project(project_config)
+        self.agents[agent.agent_id] = agent
+        self.cto.register_agent(agent.agent_id, "DREAM-Team")
+        self._save_agents()
 
     def get_team_status(self) -> dict:
         """Get a comprehensive status of the entire team."""

@@ -139,3 +139,27 @@ class ConversationManager:
             self._save()
             return True
         return False
+
+    def get_cross_context(self, exclude_conv_id: Optional[str] = None, max_convs: int = 5) -> str:
+        """Build a summary of recent conversations for CTO cross-reference."""
+        convs = sorted(self.conversations.values(), key=lambda c: c.updated_at, reverse=True)
+        lines = []
+        count = 0
+        for c in convs:
+            if c.id == exclude_conv_id or not c.messages:
+                continue
+            if count >= max_convs:
+                break
+            project_tag = f" [{c.project}]" if c.project else ""
+            last_user = ""
+            last_cto = ""
+            for m in reversed(c.messages):
+                if m.role == "user" and not last_user:
+                    last_user = m.content[:80]
+                elif m.role == "cto" and not last_cto:
+                    last_cto = m.content[:80]
+                if last_user and last_cto:
+                    break
+            lines.append(f"- \"{c.title}\"{project_tag}: User said \"{last_user}\" / CTO said \"{last_cto}\"")
+            count += 1
+        return "\n".join(lines) if lines else ""

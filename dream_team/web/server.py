@@ -32,8 +32,12 @@ async def lifespan(app: FastAPI):
     config = DreamTeamConfig.load()
     team = DreamTeam(config)
     worker = TaskWorker(team, broadcast_fn=broadcast)
+    team._task_worker = worker
+    team._broadcast_fn = broadcast
     github = GitHubManager(config.workspace_dir)
     worker_task = asyncio.create_task(worker.run())
+    # Auto-register DREAM-Team itself so CTO can self-manage
+    await team.ensure_self_project()
     yield
     worker.stop()
     worker_task.cancel()

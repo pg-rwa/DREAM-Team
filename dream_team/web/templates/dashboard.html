@@ -824,39 +824,26 @@
             activeConvId = convId;
             renderConvList();
 
-            // Show chat UI
-            document.getElementById('welcomeScreen').style.display = 'none';
+            // Show chat UI, hide welcome
             document.getElementById('chatHeader').style.display = 'flex';
             document.getElementById('inputArea').style.display = 'block';
 
-            // Load messages if not cached
-            if (!convMessages[convId]) {
-                const data = await api('GET', `/api/conversations/${convId}`);
-                if (data) {
-                    convMessages[convId] = data.conversation.messages || [];
-                    // Set header
-                    const conv = conversations.find(c => c.id === convId);
-                    if (conv) {
-                        document.getElementById('chatTitle').textContent = conv.title || 'CTO';
-                        if (conv.project) {
-                            document.getElementById('chatScope').textContent = conv.project;
-                            document.getElementById('chatScope').style.display = 'inline-block';
-                        } else {
-                            document.getElementById('chatScope').style.display = 'none';
-                        }
-                    }
-                }
+            // Always fetch fresh from server when switching conversations
+            const data = await api('GET', `/api/conversations/${convId}`);
+            if (data) {
+                convMessages[convId] = data.conversation.messages || [];
             } else {
-                const conv = conversations.find(c => c.id === convId);
-                if (conv) {
-                    document.getElementById('chatTitle').textContent = conv.title || 'CTO';
-                    if (conv.project) {
-                        document.getElementById('chatScope').textContent = conv.project;
-                        document.getElementById('chatScope').style.display = 'inline-block';
-                    } else {
-                        document.getElementById('chatScope').style.display = 'none';
-                    }
-                }
+                convMessages[convId] = [];
+            }
+
+            // Update header
+            const conv = conversations.find(c => c.id === convId);
+            document.getElementById('chatTitle').textContent = conv ? (conv.title || 'CTO') : 'CTO';
+            if (conv && conv.project) {
+                document.getElementById('chatScope').textContent = conv.project;
+                document.getElementById('chatScope').style.display = 'inline-block';
+            } else {
+                document.getElementById('chatScope').style.display = 'none';
             }
 
             renderChatArea();
@@ -865,11 +852,14 @@
 
         function renderChatArea() {
             const chatArea = document.getElementById('chatArea');
-            if (!activeConvId || !convMessages[activeConvId]) {
-                chatArea.innerHTML = '';
+
+            // No active conversation — show welcome
+            if (!activeConvId) {
+                showWelcomeScreen();
                 return;
             }
-            const messages = convMessages[activeConvId];
+
+            const messages = convMessages[activeConvId] || [];
             if (messages.length === 0) {
                 chatArea.innerHTML = '<div style="color:var(--text-dim);font-size:13px;text-align:center;padding:40px;">Start the conversation. Your CTO is ready.</div>';
                 return;
