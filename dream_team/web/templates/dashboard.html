@@ -733,9 +733,16 @@
         // ============================================================
         function connectWS() {
             const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-            ws = new WebSocket(`${proto}//${location.host}/ws`);
+            // Pass session cookie as query param for WebSocket auth
+            const token = document.cookie.split('; ').find(c => c.startsWith('dream_session='));
+            const tokenVal = token ? token.split('=')[1] : '';
+            if (!tokenVal) { window.location.href = '/login'; return; }
+            ws = new WebSocket(`${proto}//${location.host}/ws?token=${tokenVal}`);
             ws.onopen = () => console.log('WS connected');
-            ws.onclose = () => setTimeout(connectWS, 3000);
+            ws.onclose = (e) => {
+                if (e.code === 4001) { window.location.href = '/login'; return; }
+                setTimeout(connectWS, 3000);
+            };
             ws.onmessage = (e) => {
                 const msg = JSON.parse(e.data);
                 if (msg.type === 'init') {
