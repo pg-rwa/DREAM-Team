@@ -111,7 +111,7 @@ class Agent:
             return error_msg
 
     async def stream_anthropic(
-        self, system_prompt: str, user_message: str, model: str = "claude-sonnet-4-20250514"
+        self, system_prompt: str, user_message: str, model: str = "claude-sonnet-4-6"
     ) -> AsyncIterator[str]:
         """Stream a response from the Anthropic API directly, yielding text chunks."""
         import anthropic
@@ -127,7 +127,7 @@ class Agent:
 
             async with client.messages.stream(
                 model=model,
-                max_tokens=4096,
+                max_tokens=8192,
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_message}],
             ) as stream:

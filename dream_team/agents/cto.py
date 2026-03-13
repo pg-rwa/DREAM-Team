@@ -171,7 +171,7 @@ Analyze this request and respond with your plan."""
                 yield chunk
 
     async def stream_anthropic_multi(
-        self, system_prompt: str, messages: list[dict], model: str = "claude-sonnet-4-20250514"
+        self, system_prompt: str, messages: list[dict], model: str = "claude-sonnet-4-6"
     ) -> AsyncIterator[str]:
         """Stream with full conversation history."""
         import anthropic
@@ -182,7 +182,7 @@ Analyze this request and respond with your plan."""
             client = anthropic.AsyncAnthropic()
             async with client.messages.stream(
                 model=model,
-                max_tokens=4096,
+                max_tokens=8192,
                 system=system_prompt,
                 messages=messages,
             ) as stream:

@@ -145,9 +145,9 @@ class DreamTeam:
         lines = []
         for t in recent:
             status_tag = "COMPLETED" if t.status.value == "completed" else "FAILED"
-            # Truncate long results for the prompt
-            result_preview = (t.result or "")[:500]
-            if len(t.result or "") > 500:
+            # Show more of the result so CTO has real context
+            result_preview = (t.result or "")[:2000]
+            if len(t.result or "") > 2000:
                 result_preview += "... (truncated)"
             lines.append(
                 f"- [{status_tag}] \"{t.title}\" (project: {t.project}): {result_preview}"
@@ -179,8 +179,8 @@ class DreamTeam:
             line = f"- [{status_label}] \"{t.title}\" (project: {t.project}, agent: {agent_name}{elapsed})"
 
             if t.progress_snapshot:
-                # Show last 300 chars of progress
-                snap = t.progress_snapshot[-300:] if len(t.progress_snapshot) > 300 else t.progress_snapshot
+                # Show last 800 chars of progress
+                snap = t.progress_snapshot[-800:] if len(t.progress_snapshot) > 800 else t.progress_snapshot
                 line += f"\n  Latest output: {snap}"
 
             lines.append(line)

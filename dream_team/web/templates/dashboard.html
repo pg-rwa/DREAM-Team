@@ -520,6 +520,54 @@
             border-radius: 3px;
         }
 
+        /* Deployment status section */
+        .deploy-section {
+            border-top: 1px solid var(--border);
+            padding: 0 10px 10px;
+        }
+        .deploy-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            padding: 6px 10px;
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            margin-bottom: 4px;
+            font-size: 11px;
+        }
+        .deploy-item .deploy-icon {
+            flex-shrink: 0;
+            font-size: 14px;
+            line-height: 1.2;
+        }
+        .deploy-item .deploy-detail {
+            flex: 1;
+            min-width: 0;
+        }
+        .deploy-item .deploy-detail .deploy-project {
+            font-weight: 600;
+            font-size: 12px;
+        }
+        .deploy-item .deploy-detail .deploy-meta {
+            color: var(--text-dim);
+            font-size: 10px;
+            margin-top: 2px;
+            word-break: break-word;
+        }
+        .deploy-item.deploy-ok { border-left: 3px solid var(--green); }
+        .deploy-item.deploy-warn { border-left: 3px solid var(--yellow); }
+        .deploy-item.deploy-err { border-left: 3px solid var(--red); }
+        .health-badge {
+            font-size: 10px;
+            padding: 2px 8px;
+            border-radius: 4px;
+            background: rgba(16,185,129,0.15);
+            color: var(--green);
+            cursor: pointer;
+        }
+        .health-badge.stale { background: rgba(245,158,11,0.15); color: var(--yellow); }
+
         /* Thinking indicator */
         .thinking {
             display: none;
@@ -605,6 +653,7 @@
         <h1>DREAM TEAM</h1>
         <div class="header-right">
             <span><span class="status-dot"></span> Online</span>
+            <span class="health-badge" id="healthBadge" title="Click to refresh" onclick="refreshHealth()">...</span>
             <button class="btn" onclick="openModal('github')">GitHub</button>
             <button class="btn" onclick="openModal('addProject')">+ Project</button>
             <button class="btn" onclick="openModal('addTask')">+ Task</button>
@@ -664,6 +713,14 @@
                 </div>
             </div>
             <div id="progressPanel" class="progress-panel" style="display:none;"></div>
+            <div class="panel-header">
+                <h3>Deployment</h3>
+            </div>
+            <div class="deploy-section" id="deployPanel">
+                <div style="color: var(--text-dim); font-size: 11px; padding: 8px; text-align: center;">
+                    No deployment data yet.
+                </div>
+            </div>
             <div class="panel-header">
                 <h3>Tasks</h3>
             </div>
@@ -848,6 +905,10 @@
                     // Clear live progress for this task
                     if (msg.task && msg.task.task_id) clearTaskProgress(msg.task.task_id);
                     refreshTasks();
+                    // Capture deployment info from completed tasks
+                    if (msg.deployment && msg.project) {
+                        updateDeployment(msg.project, msg.deployment);
+                    }
                     // Show result in active conversation if it matches
                     if (msg.conversation_id && msg.conversation_id === activeConvId) {
                         const taskTitle = msg.task && msg.task.title || 'Task';
@@ -1458,6 +1519,74 @@
         async function logout() { await api('POST', '/api/auth/logout'); localStorage.removeItem('dream_token'); window.location.href = '/login'; }
 
         // ============================================================
+        // Health / Deployment
+        // ============================================================
+        let deploymentData = {}; // project -> deploy_info
+
+        async function refreshHealth() {
+            try {
+                const data = await api('GET', '/api/health');
+                if (data) {
+                    const badge = document.getElementById('healthBadge');
+                    badge.textContent = `${data.git_commit || '?'} | ${data.uptime || '?'}`;
+                    badge.title = `Branch: ${data.git_branch || '?'}\nCommit: ${data.git_commit || '?'}\nStarted: ${data.started_at || '?'}\nUptime: ${data.uptime || '?'}`;
+                    badge.classList.remove('stale');
+                }
+            } catch(e) {
+                document.getElementById('healthBadge').textContent = 'offline';
+                document.getElementById('healthBadge').classList.add('stale');
+            }
+        }
+
+        function updateDeployment(project, info) {
+            deploymentData[project] = info;
+            renderDeployPanel();
+        }
+
+        function renderDeployPanel() {
+            const el = document.getElementById('deployPanel');
+            const entries = Object.entries(deploymentData);
+            if (entries.length === 0) {
+                el.innerHTML = '<div style="color: var(--text-dim); font-size: 11px; padding: 8px; text-align: center;">No deployment data yet.</div>';
+                return;
+            }
+            el.innerHTML = entries.map(([project, info]) => {
+                let cls = 'deploy-ok';
+                let icon = '&#9679;'; // green dot
+                let meta = '';
+                if (!info || !info.deployed) {
+                    cls = 'deploy-err';
+                    icon = '&#10007;';
+                    meta = info ? (info.reason || 'Unknown error') : 'No data';
+                } else {
+                    const parts = [];
+                    if (info.branch) parts.push(`branch: ${info.branch}`);
+                    if (info.commit) parts.push(info.commit);
+                    if (info.uncommitted_files > 0) {
+                        cls = 'deploy-warn';
+                        icon = '&#9888;';
+                        parts.push(`${info.uncommitted_files} uncommitted files`);
+                    }
+                    if (info.pushed === false) {
+                        cls = 'deploy-warn';
+                        icon = '&#9888;';
+                        parts.push(`${info.commits_ahead || '?'} commits NOT pushed`);
+                    } else if (info.pushed === true) {
+                        parts.push('pushed');
+                    }
+                    meta = parts.join(' | ');
+                }
+                return `<div class="deploy-item ${cls}">
+                    <span class="deploy-icon">${icon}</span>
+                    <div class="deploy-detail">
+                        <div class="deploy-project">${esc(project)}</div>
+                        <div class="deploy-meta">${esc(meta)}</div>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        // ============================================================
         // Input handling
         // ============================================================
         const msgInput = document.getElementById('messageInput');
@@ -1471,6 +1600,9 @@
         // ============================================================
         connectWS();
         refreshAll();
+        refreshHealth();
+        // Auto-refresh health every 60 seconds
+        setInterval(refreshHealth, 60000);
     </script>
 </body>
 </html>
