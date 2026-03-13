@@ -2,10 +2,13 @@
 
 import asyncio
 import json
-from typing import Optional
+from typing import AsyncIterator, Optional
 
 from .agents import CTOAgent, ProjectAgent, AgentRole, AgentStatus
 from .config.settings import DreamTeamConfig, ProjectConfig
+from pathlib import Path
+
+from .conversations import ConversationManager, Conversation
 from .github.integration import GitHubManager
 from .tasks.manager import TaskManager, Task, TaskPriority
 
@@ -19,6 +22,7 @@ class DreamTeam:
         self.task_manager = TaskManager()
         self.cto = CTOAgent(name=self.config.cto_name)
         self.agents: dict[str, ProjectAgent] = {}
+        self.conversations = ConversationManager(Path(self.config.config_dir))
         self._load_agents()
 
     def _load_agents(self) -> None:
@@ -72,7 +76,6 @@ class DreamTeam:
         clone: bool = True,
     ) -> ProjectAgent:
         """Add a new project and create its agent."""
-        # Create project config
         project_config = ProjectConfig(
             name=name,
             repo_url=repo_url,
@@ -81,16 +84,13 @@ class DreamTeam:
             branch=branch,
         )
 
-        # Clone repo if requested
         workspace = self.github.get_project_path(name)
         if clone:
             try:
                 workspace = await self.github.clone_repo(repo_url, name)
-            except RuntimeError as e:
-                # If clone fails, still create the agent with the expected path
+            except RuntimeError:
                 pass
 
-        # Create agent
         agent = ProjectAgent(
             name=f"Agent-{name}",
             repo_url=repo_url,
@@ -101,7 +101,6 @@ class DreamTeam:
             workspace_path=workspace,
         )
 
-        # Register everything
         project_config.agent_name = agent.name
         self.config.add_project(project_config)
         self.agents[agent.agent_id] = agent
@@ -137,11 +136,35 @@ class DreamTeam:
         team_context = self.get_team_context()
         return await self.cto.analyze_request(message, team_context)
 
-    async def delegate_to_cto_stream(self, message: str):
-        """Stream the CTO's response to a message."""
+    async def delegate_to_cto_stream(
+        self, message: str, conversation_id: Optional[str] = None
+    ) -> AsyncIterator[str]:
+        """Stream the CTO's response, with conversation context."""
         team_context = self.get_team_context()
-        async for chunk in self.cto.analyze_request_stream(message, team_context):
+
+        conv = None
+        project_scope = None
+        conversation_messages = None
+
+        if conversation_id:
+            conv = self.conversations.get(conversation_id)
+            if conv:
+                project_scope = conv.project
+                # Add user message to conversation
+                self.conversations.add_message(conversation_id, "user", message)
+                # Get formatted messages for multi-turn
+                conversation_messages = conv.get_anthropic_messages()
+
+        full_response = []
+        async for chunk in self.cto.analyze_request_stream(
+            message, team_context, project_scope, conversation_messages
+        ):
+            full_response.append(chunk)
             yield chunk
+
+        # Save CTO response to conversation
+        if conv:
+            self.conversations.add_message(conversation_id, "cto", "".join(full_response))
 
     async def execute_task_on_project(
         self, project_name: str, task_description: str
@@ -151,7 +174,6 @@ class DreamTeam:
         if not agent:
             return f"No agent found for project '{project_name}'"
 
-        # Create task record
         task = self.task_manager.create_task(
             title=task_description[:80],
             description=task_description,

@@ -47,7 +47,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="DREAM Team",
         description="AI Agent Team Manager",
-        version="0.1.0",
+        version="0.2.0",
         lifespan=lifespan,
     )
 
@@ -89,16 +89,45 @@ def create_app() -> FastAPI:
     async def team_context(_: str = Depends(require_auth)):
         return {"context": team.get_team_context()}
 
+    # --- Conversation routes ---
+
+    class CreateConversationRequest(BaseModel):
+        title: str = "New Chat"
+        project: Optional[str] = None
+
+    @app.get("/api/conversations")
+    async def list_conversations(_: str = Depends(require_auth)):
+        return {"conversations": team.conversations.list_all()}
+
+    @app.post("/api/conversations")
+    async def create_conversation(req: CreateConversationRequest, _: str = Depends(require_auth)):
+        conv = team.conversations.create(title=req.title, project=req.project)
+        return {"conversation": conv.to_summary()}
+
+    @app.get("/api/conversations/{conv_id}")
+    async def get_conversation(conv_id: str, _: str = Depends(require_auth)):
+        conv = team.conversations.get(conv_id)
+        if not conv:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        return {"conversation": conv.to_dict()}
+
+    @app.delete("/api/conversations/{conv_id}")
+    async def delete_conversation(conv_id: str, _: str = Depends(require_auth)):
+        if not team.conversations.delete(conv_id):
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        return {"ok": True}
+
     # --- CTO routes ---
 
     class CTOMessage(BaseModel):
         message: str
+        conversation_id: Optional[str] = None
 
     @app.post("/api/cto/talk")
     async def talk_to_cto(req: CTOMessage, _: str = Depends(require_auth)):
         async def stream_response():
             try:
-                async for chunk in team.delegate_to_cto_stream(req.message):
+                async for chunk in team.delegate_to_cto_stream(req.message, req.conversation_id):
                     yield f"data: {json.dumps({'chunk': chunk})}\n\n"
             except Exception as e:
                 yield f"data: {json.dumps({'chunk': f'[Error: {e}]'})}\n\n"
@@ -162,42 +191,6 @@ def create_app() -> FastAPI:
         status = await agent.get_project_status()
         return {"project": name, "status": status}
 
-    class AgentChatMessage(BaseModel):
-        message: str
-
-    @app.post("/api/projects/{name}/chat")
-    async def chat_with_agent(name: str, req: AgentChatMessage, _: str = Depends(require_auth)):
-        """Stream a chat response from a project agent."""
-        agent = team.get_agent_for_project(name)
-        if not agent:
-            raise HTTPException(status_code=404, detail=f"No agent for '{name}'")
-
-        async def stream_response():
-            try:
-                async for chunk in agent.chat_stream(req.message):
-                    yield f"data: {json.dumps({'chunk': chunk})}\n\n"
-            except Exception as e:
-                yield f"data: {json.dumps({'chunk': f'[Error: {e}]'})}\n\n"
-            yield "data: {\"done\": true}\n\n"
-
-        return StreamingResponse(
-            stream_response(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
-        )
-
-    @app.post("/api/projects/{name}/review")
-    async def review_project(name: str, _: str = Depends(require_auth)):
-        agent = team.get_agent_for_project(name)
-        if not agent:
-            raise HTTPException(status_code=404, detail=f"No agent for '{name}'")
-        review = await agent.review_codebase()
-        return {"project": name, "review": review}
-
     # --- Task routes ---
 
     class CreateTaskRequest(BaseModel):
@@ -205,7 +198,7 @@ def create_app() -> FastAPI:
         description: str
         project: str
         priority: str = "medium"
-        execute: bool = False  # If true, immediately execute via agent
+        execute: bool = False
 
     @app.get("/api/tasks")
     async def list_tasks(
@@ -262,7 +255,6 @@ def create_app() -> FastAPI:
         username: Optional[str] = None,
         _: str = Depends(require_auth),
     ):
-        """List GitHub repos for the authenticated user."""
         repos = await github.list_repos(username or team.config.github_username or None)
         return {"repos": [r.to_dict() for r in repos]}
 
@@ -273,20 +265,16 @@ def create_app() -> FastAPI:
 
     @app.post("/api/github/repos")
     async def create_github_repo(req: CreateRepoRequest, _: str = Depends(require_auth)):
-        """Create a new GitHub repo and optionally assign an agent."""
         repo = await github.create_repo(req.name, req.description, req.private)
         return {"repo": repo.to_dict()}
 
     @app.post("/api/github/repos/{repo_name}/assign")
     async def assign_agent_to_repo(repo_name: str, _: str = Depends(require_auth)):
-        """Fetch a GitHub repo and assign a new agent to it."""
-        # Find repo info from GitHub
         repos = await github.list_repos(team.config.github_username or None)
         repo = next((r for r in repos if r.name == repo_name), None)
         if not repo:
             raise HTTPException(status_code=404, detail=f"Repo '{repo_name}' not found on GitHub")
 
-        # Add as project with an agent
         agent = await team.add_project(
             name=repo.name,
             repo_url=repo.clone_url,
@@ -306,14 +294,12 @@ def create_app() -> FastAPI:
         exclude: Optional[str] = None,
         _: str = Depends(require_auth),
     ):
-        """Import all GitHub repos and assign an agent to each."""
         exclude_list = [e.strip().lower() for e in (exclude or "").split(",") if e.strip()]
         repos = await github.list_repos(team.config.github_username or None)
         results = []
         for repo in repos:
             if repo.name.lower() in exclude_list:
                 continue
-            # Skip if already has an agent
             if team.get_agent_for_project(repo.name):
                 results.append({"repo": repo.name, "status": "already_assigned"})
                 continue
@@ -334,7 +320,6 @@ def create_app() -> FastAPI:
 
     @app.websocket("/ws")
     async def websocket_endpoint(ws: WebSocket):
-        # Check auth via query param or cookie
         token = ws.query_params.get("token") or ws.cookies.get("dream_session")
         if not token or not validate_session(token):
             await ws.close(code=4001, reason="Unauthorized")
@@ -343,14 +328,12 @@ def create_app() -> FastAPI:
         await ws.accept()
         ws_clients.append(ws)
         try:
-            # Send initial state
             await ws.send_json({
                 "type": "init",
                 "team": team.get_team_status(),
             })
             while True:
                 data = await ws.receive_text()
-                # Handle incoming messages (e.g., CTO talk via WS)
                 try:
                     msg = json.loads(data)
                     if msg.get("type") == "cto_talk":
