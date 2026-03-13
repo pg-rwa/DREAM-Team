@@ -757,16 +757,17 @@
         // ============================================================
         // WebSocket
         // ============================================================
+        let wsAuthFailures = 0;
         function connectWS() {
             const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-            // Pass session cookie as query param for WebSocket auth
-            const token = document.cookie.split('; ').find(c => c.startsWith('dream_session='));
-            const tokenVal = token ? token.split('=')[1] : '';
-            if (!tokenVal) { window.location.href = '/login'; return; }
-            ws = new WebSocket(`${proto}//${location.host}/ws?token=${tokenVal}`);
-            ws.onopen = () => console.log('WS connected');
+            const token = localStorage.getItem('dream_token') || '';
+            ws = new WebSocket(`${proto}//${location.host}/ws?token=${encodeURIComponent(token)}`);
+            ws.onopen = () => { console.log('WS connected'); wsAuthFailures = 0; };
             ws.onclose = (e) => {
-                if (e.code === 4001) { window.location.href = '/login'; return; }
+                if (e.code === 4001 || e.code === 403) {
+                    wsAuthFailures++;
+                    if (wsAuthFailures >= 3) { window.location.href = '/login'; return; }
+                }
                 setTimeout(connectWS, 3000);
             };
             ws.onmessage = (e) => {
@@ -1331,7 +1332,7 @@
         // ============================================================
         // Auth
         // ============================================================
-        async function logout() { await api('POST', '/api/auth/logout'); window.location.href = '/login'; }
+        async function logout() { await api('POST', '/api/auth/logout'); localStorage.removeItem('dream_token'); window.location.href = '/login'; }
 
         // ============================================================
         // Input handling

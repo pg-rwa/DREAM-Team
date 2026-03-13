@@ -117,6 +117,8 @@
                     body: JSON.stringify({api_key: document.getElementById('apiKey').value})
                 });
                 if (res.ok) {
+                    const data = await res.json();
+                    if (data.token) localStorage.setItem('dream_token', data.token);
                     window.location.href = '/';
                 } else {
                     err.style.display = 'block';
