@@ -124,11 +124,18 @@ class Agent:
         full_result = []
         try:
             client = anthropic.AsyncAnthropic()
-
+            # Use cache_control on system prompt to reduce repeated input costs
+            system_with_cache = [
+                {
+                    "type": "text",
+                    "text": system_prompt,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
             async with client.messages.stream(
                 model=model,
                 max_tokens=8192,
-                system=system_prompt,
+                system=system_with_cache,
                 messages=[{"role": "user", "content": user_message}],
             ) as stream:
                 async for text in stream.text_stream:

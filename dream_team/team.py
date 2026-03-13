@@ -298,6 +298,7 @@ class DreamTeam:
         async for chunk in self.cto.analyze_request_stream(
             message, team_context, project_scope, conversation_messages,
             conversation_summaries, task_results, active_progress, deployment_status,
+            model_config=self.config.models,
         ):
             full_response.append(chunk)
             yield chunk

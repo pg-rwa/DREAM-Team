@@ -32,6 +32,33 @@ class ProjectConfig:
 
 
 @dataclass
+class ModelConfig:
+    """Model selection and cost controls."""
+    # Model for complex tasks: planning, delegation, multi-step reasoning
+    heavy_model: str = "claude-sonnet-4-6"
+    # Model for simple tasks: status checks, acknowledgments, short Q&A
+    light_model: str = "claude-haiku-4-5-20251001"
+    # Max tokens for heavy vs light responses
+    heavy_max_tokens: int = 8192
+    light_max_tokens: int = 2048
+    # Max conversation messages to send (older ones trimmed)
+    max_history_messages: int = 20
+
+    def to_dict(self) -> dict:
+        return {
+            "heavy_model": self.heavy_model,
+            "light_model": self.light_model,
+            "heavy_max_tokens": self.heavy_max_tokens,
+            "light_max_tokens": self.light_max_tokens,
+            "max_history_messages": self.max_history_messages,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ModelConfig":
+        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+
+
+@dataclass
 class DreamTeamConfig:
     """Central configuration for the DREAM Team."""
 
@@ -41,6 +68,7 @@ class DreamTeamConfig:
     projects: list[ProjectConfig] = field(default_factory=list)
     cto_name: str = "CTO"
     team_name: str = "DREAM Team"
+    models: ModelConfig = field(default_factory=ModelConfig)
 
     def __post_init__(self):
         self.config_dir = os.path.expanduser(self.config_dir)
@@ -63,6 +91,7 @@ class DreamTeamConfig:
             "cto_name": self.cto_name,
             "team_name": self.team_name,
             "projects": [p.to_dict() for p in self.projects],
+            "models": self.models.to_dict(),
         }
         self.config_path.write_text(json.dumps(data, indent=2))
 
@@ -81,6 +110,8 @@ class DreamTeamConfig:
                 config.projects = [
                     ProjectConfig.from_dict(p) for p in data.get("projects", [])
                 ]
+                if "models" in data:
+                    config.models = ModelConfig.from_dict(data["models"])
             except (json.JSONDecodeError, KeyError):
                 pass
         return config

@@ -8,6 +8,38 @@ from typing import AsyncIterator, Optional
 from .base import Agent, AgentRole, AgentStatus
 
 
+# Keywords that indicate a message needs the heavy (Sonnet) model
+_HEAVY_KEYWORDS = {
+    "build", "implement", "create", "add", "fix", "refactor", "deploy",
+    "design", "architect", "plan", "migrate", "upgrade", "rewrite",
+    "feature", "integrate", "optimize", "debug", "investigate",
+}
+
+
+def _needs_heavy_model(message: str, has_task_context: bool = False) -> bool:
+    """Decide whether a message needs the expensive model or can use Haiku.
+
+    Uses Haiku (cheap) for: status checks, greetings, short confirmations, simple Q&A.
+    Uses Sonnet (heavy) for: task delegation, planning, debugging, anything with ```tasks blocks.
+    """
+    msg_lower = message.lower().strip()
+
+    # Short messages (< 30 chars) are almost always simple
+    if len(msg_lower) < 30 and not any(kw in msg_lower for kw in _HEAVY_KEYWORDS):
+        return False
+
+    # Explicit task/build requests need Sonnet
+    if any(kw in msg_lower for kw in _HEAVY_KEYWORDS):
+        return True
+
+    # If there are active task results to synthesize, use Sonnet
+    if has_task_context:
+        return True
+
+    # Default to light for conversational messages
+    return False
+
+
 @dataclass
 class CTOAgent(Agent):
     """The CTO oversees all project agents and delegates tasks."""
@@ -155,35 +187,77 @@ Analyze this request and respond with your plan."""
         task_results: Optional[str] = None,
         active_progress: Optional[str] = None,
         deployment_status: Optional[str] = None,
+        model_config=None,
     ) -> AsyncIterator[str]:
-        """Stream the CTO's analysis with multi-turn and cross-conversation context."""
+        """Stream the CTO's analysis with smart model routing.
+
+        Simple messages (status checks, greetings) -> Haiku (cheap)
+        Complex messages (planning, delegation) -> Sonnet (capable)
+        """
         system_prompt = self.get_system_prompt(
             team_context, project_scope, conversation_summaries,
             task_results, active_progress, deployment_status,
         )
 
+        # Determine model based on message complexity
+        has_task_context = bool(task_results or active_progress)
+        use_heavy = _needs_heavy_model(user_message, has_task_context)
+
+        if model_config:
+            model = model_config.heavy_model if use_heavy else model_config.light_model
+            max_tokens = model_config.heavy_max_tokens if use_heavy else model_config.light_max_tokens
+            max_history = model_config.max_history_messages
+        else:
+            model = "claude-sonnet-4-6" if use_heavy else "claude-haiku-4-5-20251001"
+            max_tokens = 8192 if use_heavy else 2048
+            max_history = 20
+
         if conversation_messages and len(conversation_messages) > 1:
-            async for chunk in self.stream_anthropic_multi(system_prompt, conversation_messages):
+            # Trim conversation history to avoid unbounded cost
+            trimmed = conversation_messages
+            if len(trimmed) > max_history:
+                trimmed = trimmed[-max_history:]
+                # Ensure first message is from user (Anthropic requirement)
+                if trimmed[0]["role"] != "user":
+                    trimmed = trimmed[1:]
+            async for chunk in self._stream_with_cache(
+                system_prompt, trimmed, model, max_tokens
+            ):
                 yield chunk
         else:
             user_prompt = f"Founder's message: {user_message}"
-            async for chunk in self.stream_anthropic(system_prompt, user_prompt):
+            async for chunk in self._stream_with_cache(
+                system_prompt, [{"role": "user", "content": user_prompt}],
+                model, max_tokens,
+            ):
                 yield chunk
 
-    async def stream_anthropic_multi(
-        self, system_prompt: str, messages: list[dict], model: str = "claude-sonnet-4-6"
+    async def _stream_with_cache(
+        self,
+        system_prompt: str,
+        messages: list[dict],
+        model: str,
+        max_tokens: int,
     ) -> AsyncIterator[str]:
-        """Stream with full conversation history."""
+        """Stream with prompt caching to reduce repeated input token costs."""
         import anthropic
 
         self.status = AgentStatus.WORKING
         full_result = []
         try:
             client = anthropic.AsyncAnthropic()
+            # Use cache_control on system prompt to avoid re-processing it each call
+            system_with_cache = [
+                {
+                    "type": "text",
+                    "text": system_prompt,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
             async with client.messages.stream(
                 model=model,
-                max_tokens=8192,
-                system=system_prompt,
+                max_tokens=max_tokens,
+                system=system_with_cache,
                 messages=messages,
             ) as stream:
                 async for text in stream.text_stream:

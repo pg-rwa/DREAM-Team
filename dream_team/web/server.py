@@ -123,6 +123,20 @@ def create_app() -> FastAPI:
             **_deploy_info,
         }
 
+    # --- Settings / model config ---
+
+    @app.get("/api/settings/models")
+    async def get_model_settings(_: str = Depends(require_auth)):
+        return team.config.models.to_dict()
+
+    @app.put("/api/settings/models")
+    async def update_model_settings(request: Request, _: str = Depends(require_auth)):
+        data = await request.json()
+        from ..config.settings import ModelConfig
+        team.config.models = ModelConfig.from_dict(data)
+        team.config.save()
+        return team.config.models.to_dict()
+
     # --- Team routes ---
 
     @app.get("/api/team/status")
