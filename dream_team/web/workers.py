@@ -74,6 +74,8 @@ class TaskWorker:
                     text = "".join(progress_buffer)
                     # Send last 500 chars as a progress snapshot
                     snapshot = text[-500:] if len(text) > 500 else text
+                    # Store in TaskManager so CTO can query it
+                    self.team.task_manager.update_progress(task_id, snapshot)
                     await self._notify({
                         "type": "task_progress",
                         "task_id": task_id,

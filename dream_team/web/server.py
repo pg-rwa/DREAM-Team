@@ -237,6 +237,19 @@ def create_app() -> FastAPI:
             "summary": team.task_manager.get_summary(),
         }
 
+    @app.get("/api/tasks/active-progress")
+    async def active_progress(_: str = Depends(require_auth)):
+        """Get in-progress tasks with their latest progress snapshots."""
+        active = team.task_manager.get_active_tasks()
+        result = []
+        for t in active:
+            agent = team.agents.get(t.assigned_agent_id) if t.assigned_agent_id else None
+            result.append({
+                **t.to_dict(),
+                "agent_name": agent.name if agent else None,
+            })
+        return {"tasks": result}
+
     @app.post("/api/tasks")
     async def create_task(req: CreateTaskRequest, _: str = Depends(require_auth)):
         from ..tasks.manager import TaskPriority

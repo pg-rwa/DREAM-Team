@@ -38,6 +38,8 @@ class Task:
     result: Optional[str] = None
     created_by: str = "cto"
     conversation_id: Optional[str] = None
+    progress_snapshot: Optional[str] = None
+    progress_updated_at: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -54,6 +56,8 @@ class Task:
             "result": self.result,
             "created_by": self.created_by,
             "conversation_id": self.conversation_id,
+            "progress_snapshot": self.progress_snapshot,
+            "progress_updated_at": self.progress_updated_at,
         }
 
     @classmethod
@@ -161,6 +165,20 @@ class TaskManager:
         for t in self.tasks.values():
             by_status[t.status.value] = by_status.get(t.status.value, 0) + 1
         return {"total": total, "by_status": by_status}
+
+    def update_progress(self, task_id: str, snapshot: str) -> None:
+        """Store latest progress snapshot for an in-progress task."""
+        if task_id in self.tasks:
+            self.tasks[task_id].progress_snapshot = snapshot
+            self.tasks[task_id].progress_updated_at = datetime.now().isoformat()
+            # Don't _save() here to avoid disk thrash on frequent updates
+
+    def get_active_progress(self) -> list[Task]:
+        """Get all in-progress tasks that have progress snapshots."""
+        return [
+            t for t in self.tasks.values()
+            if t.status == TaskStatus.IN_PROGRESS and t.progress_snapshot
+        ]
 
     def get_recent_results(self, limit: int = 10) -> list[Task]:
         """Get recently completed/failed tasks with results, newest first."""

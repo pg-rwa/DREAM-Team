@@ -60,10 +60,11 @@ class DreamTeam:
 
             tasks = self.task_manager.get_tasks_for_agent(agent.agent_id)
             active = [t for t in tasks if t.status.value in ("pending", "in_progress")]
+            current = agent.current_task or "none"
 
             lines.append(
                 f"  - {agent.name} ({agent.agent_id}) {status_icon}: "
-                f"project=\"{agent.repo_name}\" | {len(active)} active tasks"
+                f"project=\"{agent.repo_name}\" | {len(active)} active tasks | current: {current}"
             )
 
         return "\n".join(lines)
@@ -151,6 +152,38 @@ class DreamTeam:
             )
         return "\n".join(lines)
 
+    def get_active_progress_context(self) -> str:
+        """Build a context string of in-progress tasks with live progress snapshots."""
+        active = self.task_manager.get_active_tasks()
+        if not active:
+            return ""
+
+        lines = []
+        for t in active:
+            agent = self.agents.get(t.assigned_agent_id) if t.assigned_agent_id else None
+            agent_name = agent.name if agent else "unassigned"
+            elapsed = ""
+            if t.updated_at and t.created_at:
+                try:
+                    from datetime import datetime
+                    started = datetime.fromisoformat(t.created_at)
+                    now = datetime.now()
+                    mins = int((now - started).total_seconds() / 60)
+                    elapsed = f", running for {mins}m" if mins > 0 else ", just started"
+                except Exception:
+                    pass
+
+            status_label = "IN PROGRESS" if t.status.value == "in_progress" else "PENDING"
+            line = f"- [{status_label}] \"{t.title}\" (project: {t.project}, agent: {agent_name}{elapsed})"
+
+            if t.progress_snapshot:
+                # Show last 300 chars of progress
+                snap = t.progress_snapshot[-300:] if len(t.progress_snapshot) > 300 else t.progress_snapshot
+                line += f"\n  Latest output: {snap}"
+
+            lines.append(line)
+        return "\n".join(lines)
+
     async def delegate_to_cto(self, message: str) -> str:
         """Send a message to the CTO for analysis and delegation."""
         team_context = self.get_team_context()
@@ -224,11 +257,12 @@ class DreamTeam:
                 )
 
         task_results = self.get_task_results_context()
+        active_progress = self.get_active_progress_context()
 
         full_response = []
         async for chunk in self.cto.analyze_request_stream(
             message, team_context, project_scope, conversation_messages,
-            conversation_summaries, task_results,
+            conversation_summaries, task_results, active_progress,
         ):
             full_response.append(chunk)
             yield chunk

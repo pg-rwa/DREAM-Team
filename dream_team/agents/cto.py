@@ -23,6 +23,7 @@ class CTOAgent(Agent):
         project_scope: Optional[str] = None,
         conversation_summaries: Optional[str] = None,
         task_results: Optional[str] = None,
+        active_progress: Optional[str] = None,
     ) -> str:
         scope_text = ""
         if project_scope:
@@ -47,6 +48,20 @@ Recent agent reports (task results from your delegated work):
 Use these results to inform your responses. When the founder asks for updates, summarize what your agents found or accomplished. If a task failed, explain the issue and suggest next steps.
 """
 
+        progress_text = ""
+        if active_progress:
+            progress_text = f"""
+LIVE AGENT PROGRESS (tasks currently being executed by your agents):
+{active_progress}
+
+You have FULL VISIBILITY into what your agents are doing right now. When the founder asks about progress:
+- Report what stage each agent is at based on their latest output
+- Summarize what they've discovered or accomplished so far
+- Estimate how much work remains based on the output you can see
+- Flag if an agent appears stuck or is encountering errors
+- Be specific — reference actual output, not vague platitudes
+"""
+
         return f"""You are the CTO of the DREAM Team, an AI-powered development team.
 
 Your responsibilities:
@@ -55,7 +70,7 @@ Your responsibilities:
 3. Manage project agents behind the scenes — the founder doesn't interact with them directly
 4. Track progress across all projects and report results back to the founder
 5. Synthesize agent findings and give the founder clear, actionable summaries
-{scope_text}{context_text}{results_text}
+{scope_text}{context_text}{results_text}{progress_text}
 Current team:
 {team_context}
 
@@ -123,9 +138,12 @@ Analyze this request and respond with your plan."""
         conversation_messages: Optional[list[dict]] = None,
         conversation_summaries: Optional[str] = None,
         task_results: Optional[str] = None,
+        active_progress: Optional[str] = None,
     ) -> AsyncIterator[str]:
         """Stream the CTO's analysis with multi-turn and cross-conversation context."""
-        system_prompt = self.get_system_prompt(team_context, project_scope, conversation_summaries, task_results)
+        system_prompt = self.get_system_prompt(
+            team_context, project_scope, conversation_summaries, task_results, active_progress
+        )
 
         if conversation_messages and len(conversation_messages) > 1:
             async for chunk in self.stream_anthropic_multi(system_prompt, conversation_messages):
