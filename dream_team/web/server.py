@@ -31,7 +31,7 @@ async def lifespan(app: FastAPI):
     global team, worker, github
     config = DreamTeamConfig.load()
     team = DreamTeam(config)
-    worker = TaskWorker(team)
+    worker = TaskWorker(team, broadcast_fn=broadcast)
     github = GitHubManager(config.workspace_dir)
     worker_task = asyncio.create_task(worker.run())
     yield

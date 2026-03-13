@@ -7,16 +7,21 @@ from typing import Optional
 class TaskWorker:
     """Processes queued tasks in the background using project agents."""
 
-    def __init__(self, team):
+    def __init__(self, team, broadcast_fn=None):
         self.team = team
         self.queue: asyncio.Queue[str] = asyncio.Queue()
         self._running = False
+        self._broadcast = broadcast_fn
 
     def enqueue(self, task_id: str) -> None:
         self.queue.put_nowait(task_id)
 
     def stop(self) -> None:
         self._running = False
+
+    async def _notify(self, msg: dict) -> None:
+        if self._broadcast:
+            await self._broadcast(msg)
 
     async def run(self) -> None:
         """Main worker loop - processes tasks from the queue."""
@@ -46,10 +51,33 @@ class TaskWorker:
             self.team.task_manager.start_task(task_id)
             agent.current_task = task.title
 
+            # Notify UI that agent is now working
+            await self._notify({
+                "type": "agent_status",
+                "project": task.project,
+                "agent_id": agent.agent_id,
+                "status": agent.status.value,
+                "task": task.to_dict(),
+            })
+
             try:
                 result = await agent.execute_task(task.description)
                 self.team.task_manager.complete_task(task_id, result)
+                await self._notify({
+                    "type": "task_completed",
+                    "project": task.project,
+                    "agent_id": agent.agent_id,
+                    "status": agent.status.value,
+                    "task": task.to_dict(),
+                })
             except Exception as e:
                 self.team.task_manager.fail_task(task_id, str(e))
+                await self._notify({
+                    "type": "task_failed",
+                    "project": task.project,
+                    "agent_id": agent.agent_id,
+                    "status": agent.status.value,
+                    "task": task.to_dict(),
+                })
             finally:
                 agent.current_task = None

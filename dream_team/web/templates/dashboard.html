@@ -307,12 +307,19 @@
         .project-card {
             background: var(--surface2);
             border: 1px solid var(--border);
+            border-left: 3px solid var(--border);
             border-radius: 8px;
             padding: 12px;
             margin-bottom: 8px;
-            transition: border-color 0.2s;
+            transition: all 0.3s;
+            position: relative;
         }
-        .project-card:hover { border-color: var(--border-active); }
+        .project-card:hover { border-color: var(--border-active); border-left-color: inherit; }
+        .project-card.card-idle { border-left-color: var(--green); }
+        .project-card.card-working { border-left-color: var(--yellow); }
+        .project-card.card-error { border-left-color: var(--red); }
+        .project-card.card-offline { border-left-color: var(--text-dim); }
+        .project-card.card-waiting { border-left-color: var(--blue); }
         .project-card .project-name {
             font-weight: 600;
             font-size: 13px;
@@ -357,6 +364,45 @@
         .status-idle { background: rgba(16,185,129,0.15); color: var(--green); }
         .status-working { background: rgba(245,158,11,0.15); color: var(--yellow); }
         .status-error { background: rgba(239,68,68,0.15); color: var(--red); }
+        .status-waiting { background: rgba(59,130,246,0.15); color: var(--blue); }
+        .status-offline { background: rgba(100,116,139,0.15); color: var(--text-dim); }
+
+        /* Pulsing dot for working status */
+        .pulse-dot {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 4px;
+            vertical-align: middle;
+        }
+        .pulse-dot.dot-idle { background: var(--green); }
+        .pulse-dot.dot-working {
+            background: var(--yellow);
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+        .pulse-dot.dot-error { background: var(--red); }
+        .pulse-dot.dot-waiting {
+            background: var(--blue);
+            animation: pulse 2s ease-in-out infinite;
+        }
+        .pulse-dot.dot-offline { background: var(--text-dim); }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; box-shadow: 0 0 0 0 currentColor; }
+            50% { opacity: 0.6; box-shadow: 0 0 8px 2px currentColor; }
+        }
+
+        /* Task count badge on project card */
+        .project-task-count {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 10px;
+            color: var(--text-dim);
+            background: var(--bg);
+            padding: 2px 8px;
+            border-radius: 10px;
+        }
+        .project-task-count.has-active { color: var(--yellow); background: rgba(245,158,11,0.1); }
         .project-card .project-actions {
             display: flex;
             gap: 4px;
@@ -664,6 +710,7 @@
         let convMessages = {};    // conv_id -> [messages] (loaded from server)
         let projects = [];        // project list
         let agents = {};          // agent_id -> agent
+        let cachedTasks = [];     // full task list for project counts
         let streamingMsgIdx = -1; // index of currently streaming message
 
         // ============================================================
@@ -695,7 +742,18 @@
                     updateTeamData(msg.team);
                 } else if (msg.type === 'project_added' || msg.type === 'project_removed') {
                     refreshAll();
-                } else if (msg.type === 'task_started' || msg.type === 'task_completed') {
+                } else if (msg.type === 'agent_status') {
+                    // Live update agent status on project card
+                    if (msg.agent_id && agents[msg.agent_id]) {
+                        agents[msg.agent_id].status = msg.status;
+                        renderProjects();
+                    }
+                    refreshTasks();
+                } else if (msg.type === 'task_completed' || msg.type === 'task_failed' || msg.type === 'task_started') {
+                    if (msg.agent_id && agents[msg.agent_id]) {
+                        agents[msg.agent_id].status = msg.status || 'idle';
+                        renderProjects();
+                    }
                     refreshTasks();
                 }
             };
@@ -723,7 +781,11 @@
 
         async function refreshTasks() {
             const data = await api('GET', '/api/tasks');
-            if (data) renderTasks(data.tasks);
+            if (data) {
+                cachedTasks = data.tasks || [];
+                renderTasks(cachedTasks);
+                renderProjects(); // Update task counts on project cards
+            }
         }
 
         function updateTeamData(data) {
@@ -983,19 +1045,37 @@
             const agentsByProject = {};
             Object.values(agents).forEach(a => { agentsByProject[a.repo_name] = a; });
 
+            // Build task counts per project
+            const taskCounts = {};
+            if (cachedTasks) {
+                cachedTasks.forEach(t => {
+                    if (!taskCounts[t.project]) taskCounts[t.project] = { total: 0, active: 0 };
+                    taskCounts[t.project].total++;
+                    if (t.status === 'pending' || t.status === 'in_progress') taskCounts[t.project].active++;
+                });
+            }
+
             el.innerHTML = projects.map(p => {
                 const agent = agentsByProject[p.name];
-                const statusClass = agent ? `status-${agent.status}` : 'status-idle';
-                const statusText = agent ? agent.status.toUpperCase() : 'NO AGENT';
+                const status = agent ? agent.status : 'offline';
+                const statusClass = `status-${status}`;
+                const statusText = agent ? status.toUpperCase() : 'NO AGENT';
+                const cardClass = `card-${status}`;
+                const dotClass = `dot-${status}`;
                 const techTags = (p.tech_stack || []).map(t => `<span class="tech-tag">${esc(t)}</span>`).join('');
-                return `<div class="project-card">
+                const tc = taskCounts[p.name] || { total: 0, active: 0 };
+                const taskBadge = tc.total > 0
+                    ? `<span class="project-task-count${tc.active > 0 ? ' has-active' : ''}">${tc.active > 0 ? tc.active + ' running' : tc.total + ' tasks'}</span>`
+                    : '';
+                return `<div class="project-card ${cardClass}">
                     <div class="project-name">
-                        ${esc(p.name)}
+                        <span><span class="pulse-dot ${dotClass}"></span>${esc(p.name)}</span>
                         <span class="status-badge ${statusClass}">${statusText}</span>
                     </div>
                     <div class="project-desc">${esc(p.description || 'No description')}</div>
                     <div class="project-footer">
                         <div class="tech-tags">${techTags || '<span class="tech-tag">-</span>'}</div>
+                        ${taskBadge}
                     </div>
                     <div class="project-actions">
                         <button class="btn btn-sm btn-ghost" onclick="chatAboutProject('${esc(p.name)}')">Chat about</button>
