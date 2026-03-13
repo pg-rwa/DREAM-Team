@@ -193,6 +193,65 @@ class Agent:
             )
             return error_msg
 
+    async def execute_interactive_streaming(
+        self, prompt: str, working_dir: Optional[str] = None, progress_callback=None,
+    ) -> str:
+        """Execute via Claude Code, streaming stdout chunks to a callback."""
+        cwd = working_dir or self.workspace_path or os.getcwd()
+
+        self.status = AgentStatus.WORKING
+        self.conversation_history.append(
+            AgentMessage(role="user", content=prompt, agent_id=self.agent_id)
+        )
+
+        try:
+            cmd = [
+                "claude",
+                "--dangerously-skip-permissions",
+                "--output-format", "text",
+                "-p", prompt,
+            ]
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                cwd=cwd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
+            chunks = []
+            while True:
+                chunk = await process.stdout.read(512)
+                if not chunk:
+                    break
+                text = chunk.decode("utf-8", errors="replace")
+                chunks.append(text)
+                if progress_callback:
+                    try:
+                        await progress_callback(text)
+                    except Exception:
+                        pass
+
+            await process.wait()
+            result = "".join(chunks).strip()
+
+            if process.returncode != 0 and not result:
+                stderr_out = await process.stderr.read()
+                result = f"Error (exit {process.returncode}): {stderr_out.decode('utf-8', errors='replace').strip()}"
+
+            self.conversation_history.append(
+                AgentMessage(role="agent", content=result, agent_id=self.agent_id)
+            )
+            self.status = AgentStatus.IDLE
+            return result
+
+        except Exception as e:
+            self.status = AgentStatus.ERROR
+            error_msg = f"Claude Code execution failed: {e}"
+            self.conversation_history.append(
+                AgentMessage(role="system", content=error_msg, agent_id=self.agent_id)
+            )
+            return error_msg
+
     def get_system_prompt(self) -> str:
         """Override in subclasses for role-specific system prompts."""
         return f"You are {self.name}, a {self.role.value} on the DREAM Team."

@@ -46,7 +46,7 @@ Your responsibilities:
 When given a task, execute it thoroughly using the available tools.
 Always work within your project directory."""
 
-    async def execute_task(self, task_description: str) -> str:
+    async def execute_task(self, task_description: str, progress_callback=None) -> str:
         """Execute a development task on this project."""
         prompt = f"""{self.get_system_prompt()}
 
@@ -55,7 +55,10 @@ Task: {task_description}
 Execute this task. Work within the project directory at {self.workspace_path}.
 Provide a summary of what you did when complete."""
 
-        # Use interactive mode for actual code changes
+        if progress_callback:
+            return await self.execute_interactive_streaming(
+                prompt, self.workspace_path, progress_callback
+            )
         return await self.execute_interactive(prompt, self.workspace_path)
 
     async def chat_stream(self, user_message: str) -> AsyncIterator[str]:

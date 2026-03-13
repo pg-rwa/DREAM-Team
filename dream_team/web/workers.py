@@ -1,6 +1,7 @@
 """Background task workers for executing agent tasks asynchronously."""
 
 import asyncio
+import time
 from typing import Optional
 
 
@@ -60,8 +61,31 @@ class TaskWorker:
                 "task": task.to_dict(),
             })
 
+            # Progress callback - throttled to avoid flooding WebSocket
+            last_progress_time = [0.0]
+            progress_buffer = []
+
+            async def on_progress(chunk: str):
+                progress_buffer.append(chunk)
+                now = time.time()
+                # Send progress at most every 2 seconds
+                if now - last_progress_time[0] >= 2.0:
+                    last_progress_time[0] = now
+                    text = "".join(progress_buffer)
+                    # Send last 500 chars as a progress snapshot
+                    snapshot = text[-500:] if len(text) > 500 else text
+                    await self._notify({
+                        "type": "task_progress",
+                        "task_id": task_id,
+                        "project": task.project,
+                        "agent_id": agent.agent_id,
+                        "title": task.title,
+                        "conversation_id": task.conversation_id,
+                        "progress": snapshot,
+                    })
+
             try:
-                result = await agent.execute_task(task.description)
+                result = await agent.execute_task(task.description, progress_callback=on_progress)
                 self.team.task_manager.complete_task(task_id, result)
 
                 # Post result back to the originating conversation

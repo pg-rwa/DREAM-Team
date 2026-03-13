@@ -438,6 +438,39 @@
             margin-top: 6px;
         }
 
+        /* Live progress panel */
+        .progress-panel {
+            border-top: 1px solid var(--border);
+            padding: 8px 10px;
+        }
+        .progress-item {
+            background: var(--surface2);
+            border: 1px solid var(--yellow);
+            border-radius: 6px;
+            padding: 8px 10px;
+            margin-bottom: 6px;
+        }
+        .progress-header {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            margin-bottom: 6px;
+        }
+        .progress-output {
+            font-size: 10px;
+            color: var(--text-dim);
+            background: var(--bg);
+            border-radius: 4px;
+            padding: 6px 8px;
+            margin: 0;
+            max-height: 100px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+            line-height: 1.4;
+        }
+
         /* Tasks section in right panel */
         .tasks-section {
             border-top: 1px solid var(--border);
@@ -630,6 +663,7 @@
                     No projects yet.
                 </div>
             </div>
+            <div id="progressPanel" class="progress-panel" style="display:none;"></div>
             <div class="panel-header">
                 <h3>Tasks</h3>
             </div>
@@ -811,6 +845,8 @@
                         agents[msg.agent_id].status = msg.status || 'idle';
                         renderProjects();
                     }
+                    // Clear live progress for this task
+                    if (msg.task && msg.task.task_id) clearTaskProgress(msg.task.task_id);
                     refreshTasks();
                     // Show result in active conversation if it matches
                     if (msg.conversation_id && msg.conversation_id === activeConvId) {
@@ -823,6 +859,9 @@
                         convMessages[activeConvId].push({role: 'system', content: report, timestamp: new Date().toISOString()});
                         renderChatArea();
                     }
+                } else if (msg.type === 'task_progress') {
+                    // Live progress update from an agent
+                    updateTaskProgress(msg);
                 } else if (msg.type === 'task_started') {
                     if (msg.agent_id && agents[msg.agent_id]) {
                         agents[msg.agent_id].status = msg.status || 'working';
@@ -1248,6 +1287,44 @@
                     <span class="task-title" title="${esc(t.description)}">${esc(t.title)}</span>
                     <span class="task-project-tag">${esc(t.project)}</span>
                     ${hasResult ? `<div class="task-result">${resultPreview}</div>` : ''}
+                </div>`;
+            }).join('');
+        }
+
+        let activeProgress = {}; // task_id -> {title, project, progress}
+
+        function updateTaskProgress(msg) {
+            activeProgress[msg.task_id] = {
+                title: msg.title,
+                project: msg.project,
+                progress: msg.progress,
+                conversation_id: msg.conversation_id,
+            };
+            renderProgressPanel();
+        }
+
+        function clearTaskProgress(taskId) {
+            delete activeProgress[taskId];
+            renderProgressPanel();
+        }
+
+        function renderProgressPanel() {
+            const el = document.getElementById('progressPanel');
+            const entries = Object.entries(activeProgress);
+            if (entries.length === 0) {
+                el.style.display = 'none';
+                return;
+            }
+            el.style.display = 'block';
+            el.innerHTML = entries.map(([tid, p]) => {
+                const lines = p.progress.split('\n').slice(-6).join('\n');
+                return `<div class="progress-item">
+                    <div class="progress-header">
+                        <span class="task-status-dot in_progress"></span>
+                        <strong>${esc(p.title)}</strong>
+                        <span class="task-project-tag">${esc(p.project)}</span>
+                    </div>
+                    <pre class="progress-output">${esc(lines)}</pre>
                 </div>`;
             }).join('');
         }
