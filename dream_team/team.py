@@ -133,6 +133,24 @@ class DreamTeam:
                 return agent
         return None
 
+    def get_task_results_context(self) -> str:
+        """Build a context string of recent task results for the CTO."""
+        recent = self.task_manager.get_recent_results(limit=10)
+        if not recent:
+            return ""
+
+        lines = []
+        for t in recent:
+            status_tag = "COMPLETED" if t.status.value == "completed" else "FAILED"
+            # Truncate long results for the prompt
+            result_preview = (t.result or "")[:500]
+            if len(t.result or "") > 500:
+                result_preview += "... (truncated)"
+            lines.append(
+                f"- [{status_tag}] \"{t.title}\" (project: {t.project}): {result_preview}"
+            )
+        return "\n".join(lines)
+
     async def delegate_to_cto(self, message: str) -> str:
         """Send a message to the CTO for analysis and delegation."""
         team_context = self.get_team_context()
@@ -165,6 +183,7 @@ class DreamTeam:
                 project=project,
                 priority=priority,
                 assigned_agent_id=agent.agent_id,
+                conversation_id=conversation_id,
             )
 
             # Auto-execute via worker
@@ -204,9 +223,12 @@ class DreamTeam:
                     exclude_conv_id=conversation_id
                 )
 
+        task_results = self.get_task_results_context()
+
         full_response = []
         async for chunk in self.cto.analyze_request_stream(
-            message, team_context, project_scope, conversation_messages, conversation_summaries
+            message, team_context, project_scope, conversation_messages,
+            conversation_summaries, task_results,
         ):
             full_response.append(chunk)
             yield chunk

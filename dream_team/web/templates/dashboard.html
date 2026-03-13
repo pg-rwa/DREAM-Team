@@ -263,6 +263,16 @@
             color: var(--text-dim);
             background: transparent;
         }
+        .message.system.agent-report .message-body {
+            border-color: var(--green);
+            background: rgba(16, 185, 129, 0.05);
+            color: var(--text);
+            font-size: 13px;
+        }
+        .message.system.agent-report.failed .message-body {
+            border-color: var(--red);
+            background: rgba(239, 68, 68, 0.05);
+        }
         .welcome-screen {
             display: flex;
             flex-direction: column;
@@ -445,7 +455,20 @@
             border-radius: 6px;
             margin-bottom: 4px;
             font-size: 12px;
+            flex-wrap: wrap;
         }
+        .task-result {
+            width: 100%;
+            font-size: 11px;
+            color: var(--text-dim);
+            margin-top: 4px;
+            padding-top: 4px;
+            border-top: 1px solid var(--border);
+            display: none;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .task-result.open { display: block; }
         .task-status-dot {
             width: 8px; height: 8px;
             border-radius: 50%;
@@ -783,9 +806,26 @@
                         renderProjects();
                     }
                     refreshTasks();
-                } else if (msg.type === 'task_completed' || msg.type === 'task_failed' || msg.type === 'task_started') {
+                } else if (msg.type === 'task_completed' || msg.type === 'task_failed') {
                     if (msg.agent_id && agents[msg.agent_id]) {
                         agents[msg.agent_id].status = msg.status || 'idle';
+                        renderProjects();
+                    }
+                    refreshTasks();
+                    // Show result in active conversation if it matches
+                    if (msg.conversation_id && msg.conversation_id === activeConvId) {
+                        const taskTitle = msg.task && msg.task.title || 'Task';
+                        const project = msg.task && msg.task.project || '';
+                        const isSuccess = msg.type === 'task_completed';
+                        const body = isSuccess ? (msg.result_preview || 'Done') : ('Error: ' + (msg.error || 'Unknown'));
+                        const report = `**Agent Report — ${taskTitle}** (project: ${project})\nStatus: ${isSuccess ? 'Completed' : 'Failed'}\n\n${body}`;
+                        if (!convMessages[activeConvId]) convMessages[activeConvId] = [];
+                        convMessages[activeConvId].push({role: 'system', content: report, timestamp: new Date().toISOString()});
+                        renderChatArea();
+                    }
+                } else if (msg.type === 'task_started') {
+                    if (msg.agent_id && agents[msg.agent_id]) {
+                        agents[msg.agent_id].status = msg.status || 'working';
                         renderProjects();
                     }
                     refreshTasks();
@@ -912,9 +952,12 @@
             }
             chatArea.innerHTML = messages.map(m => {
                 const type = m.role === 'user' ? 'user' : m.role === 'system' ? 'system' : 'cto';
-                const roleName = m.role === 'user' ? 'You' : m.role === 'cto' ? 'CTO' : 'System';
+                const isAgentReport = m.role === 'system' && m.content.startsWith('**Agent Report');
+                const isFailed = isAgentReport && m.content.includes('Status: Failed');
+                const extraClass = isAgentReport ? (isFailed ? ' agent-report failed' : ' agent-report') : '';
+                const roleName = m.role === 'user' ? 'You' : isAgentReport ? 'Agent Report' : m.role === 'cto' ? 'CTO' : 'System';
                 const time = m.timestamp ? new Date(m.timestamp).toLocaleTimeString() : '';
-                return `<div class="message ${type}">
+                return `<div class="message ${type}${extraClass}">
                     <div class="message-header"><span class="role">${roleName}</span> &mdash; ${time}</div>
                     <div class="message-body">${esc(m.content)}</div>
                 </div>`;
@@ -1198,10 +1241,13 @@
             // Show most recent 15 tasks
             const recent = tasks.slice(-15).reverse();
             el.innerHTML = recent.map(t => {
-                return `<div class="task-item">
+                const hasResult = t.result && (t.status === 'completed' || t.status === 'failed');
+                const resultPreview = hasResult ? esc(t.result.substring(0, 120)) + (t.result.length > 120 ? '...' : '') : '';
+                return `<div class="task-item" ${hasResult ? `onclick="this.querySelector('.task-result').classList.toggle('open')" style="cursor:pointer;"` : ''}>
                     <span class="task-status-dot ${t.status}"></span>
                     <span class="task-title" title="${esc(t.description)}">${esc(t.title)}</span>
                     <span class="task-project-tag">${esc(t.project)}</span>
+                    ${hasResult ? `<div class="task-result">${resultPreview}</div>` : ''}
                 </div>`;
             }).join('');
         }

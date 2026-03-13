@@ -37,6 +37,7 @@ class Task:
     completed_at: Optional[str] = None
     result: Optional[str] = None
     created_by: str = "cto"
+    conversation_id: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -52,6 +53,7 @@ class Task:
             "completed_at": self.completed_at,
             "result": self.result,
             "created_by": self.created_by,
+            "conversation_id": self.conversation_id,
         }
 
     @classmethod
@@ -91,6 +93,7 @@ class TaskManager:
         project: str,
         priority: TaskPriority = TaskPriority.MEDIUM,
         assigned_agent_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
     ) -> Task:
         task = Task(
             title=title,
@@ -98,6 +101,7 @@ class TaskManager:
             project=project,
             priority=priority,
             assigned_agent_id=assigned_agent_id,
+            conversation_id=conversation_id,
         )
         self.tasks[task.task_id] = task
         self._save()
@@ -157,3 +161,11 @@ class TaskManager:
         for t in self.tasks.values():
             by_status[t.status.value] = by_status.get(t.status.value, 0) + 1
         return {"total": total, "by_status": by_status}
+
+    def get_recent_results(self, limit: int = 10) -> list[Task]:
+        """Get recently completed/failed tasks with results, newest first."""
+        finished = [
+            t for t in self.tasks.values()
+            if t.status in (TaskStatus.COMPLETED, TaskStatus.FAILED) and t.result
+        ]
+        return sorted(finished, key=lambda t: t.updated_at, reverse=True)[:limit]

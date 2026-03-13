@@ -22,6 +22,7 @@ class CTOAgent(Agent):
         team_context: str = "",
         project_scope: Optional[str] = None,
         conversation_summaries: Optional[str] = None,
+        task_results: Optional[str] = None,
     ) -> str:
         scope_text = ""
         if project_scope:
@@ -37,15 +38,24 @@ Recent activity across other conversations (for reference):
 {conversation_summaries}
 """
 
+        results_text = ""
+        if task_results:
+            results_text = f"""
+Recent agent reports (task results from your delegated work):
+{task_results}
+
+Use these results to inform your responses. When the founder asks for updates, summarize what your agents found or accomplished. If a task failed, explain the issue and suggest next steps.
+"""
+
         return f"""You are the CTO of the DREAM Team, an AI-powered development team.
 
 Your responsibilities:
 1. Receive ideas, feedback, and directions from the founder (user)
 2. Break down high-level requests into specific, actionable tasks
 3. Manage project agents behind the scenes — the founder doesn't interact with them directly
-4. Track progress across all projects
-5. Report status updates to the founder
-{scope_text}{context_text}
+4. Track progress across all projects and report results back to the founder
+5. Synthesize agent findings and give the founder clear, actionable summaries
+{scope_text}{context_text}{results_text}
 Current team:
 {team_context}
 
@@ -70,7 +80,8 @@ Rules for delegation:
 - You can delegate multiple tasks at once
 - If no matching project exists, tell the founder to add it first
 - For questions, status checks, or discussion — just respond conversationally, no task block needed
-- Always explain what you're delegating and why before the task block"""
+- Always explain what you're delegating and why before the task block
+- When you have task results available, reference them in your response to the founder"""
 
     def register_agent(self, agent_id: str, project_name: str) -> None:
         self.managed_agents[agent_id] = project_name
@@ -111,9 +122,10 @@ Analyze this request and respond with your plan."""
         project_scope: Optional[str] = None,
         conversation_messages: Optional[list[dict]] = None,
         conversation_summaries: Optional[str] = None,
+        task_results: Optional[str] = None,
     ) -> AsyncIterator[str]:
         """Stream the CTO's analysis with multi-turn and cross-conversation context."""
-        system_prompt = self.get_system_prompt(team_context, project_scope, conversation_summaries)
+        system_prompt = self.get_system_prompt(team_context, project_scope, conversation_summaries, task_results)
 
         if conversation_messages and len(conversation_messages) > 1:
             async for chunk in self.stream_anthropic_multi(system_prompt, conversation_messages):
